@@ -120,8 +120,9 @@ func (s State) WorkspaceLabel() string {
 	return s.Workspace
 }
 
-// SplitRight opens a shell pane to the right of pane, taking ratio of the
-// width, without moving focus. It returns the new pane's id.
+// SplitRight opens a shell pane to the right of pane without moving focus.
+// ratio is the share of the width the original pane keeps. It returns the
+// new pane's id.
 func SplitRight(pane, cwd string, ratio float64) (string, error) {
 	res, err := call("pane", "split", "--pane", pane, "--direction", "right",
 		"--ratio", strconv.FormatFloat(ratio, 'f', 2, 64), "--cwd", cwd, "--no-focus")

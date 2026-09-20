@@ -43,7 +43,7 @@ const (
 	refreshEvery   = 3 * time.Second
 	fetchEvery     = 60 * time.Second
 	selectionDelay = 250 * time.Millisecond
-	companionRatio = 0.7 // share of the width lazygit gets
+	companionRatio = 0.3 // share of the width the list keeps; lazygit gets the rest
 )
 
 func refreshTick() tea.Cmd {
