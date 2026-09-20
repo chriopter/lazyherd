@@ -1,0 +1,31 @@
+# Herdr plugin manifest. The ids and the pane title are mirrored in main.go.
+
+id = "chriopter.lazyherd"
+name = "lazyherd"
+version = "0.11.0"
+min_herdr_version = "0.7.4"
+description = "Cockpit over every Git repo: changes, sync state, lazygit next to it"
+platforms = ["linux", "macos"]
+
+# Fetches the release binary for this checkout, or builds it with Go.
+[[build]]
+command = ["sh", "scripts/build.sh"]
+
+# The cockpit: repo list on the left, lazygit on the right, in its own tab.
+[[panes]]
+id = "cockpit"
+title = "lazyherd"
+placement = "tab"
+command = ["bin/lazyherd"]
+
+# Focus the workspace's cockpit, or open one. Bind it in config.toml:
+#   [[keys.command]]
+#   key = "prefix+g"
+#   type = "plugin_action"
+#   command = "chriopter.lazyherd.open"
+[[actions]]
+id = "open"
+title = "Open lazyherd"
+description = "Focus this workspace's lazyherd cockpit, or open one"
+contexts = ["workspace"]
+command = ["bin/lazyherd", "open"]

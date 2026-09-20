@@ -14,12 +14,26 @@ type pins struct {
 	byWorkspace map[string][]string
 }
 
-func pinsPath() string {
+// ConfigDir holds the user's settings: the directory Herdr provides for the
+// plugin, or ~/.config/lazyherd when the binary runs on its own.
+func ConfigDir() string {
+	if dir := os.Getenv("HERDR_PLUGIN_CONFIG_DIR"); dir != "" {
+		return dir
+	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		dir = filepath.Join(os.Getenv("HOME"), ".config")
 	}
-	return filepath.Join(dir, "lazyherd", "pins.json")
+	return filepath.Join(dir, "lazyherd")
+}
+
+// pinsPath is where pins live: Herdr's state directory for the plugin, or
+// next to the config when the binary runs on its own.
+func pinsPath() string {
+	if dir := os.Getenv("HERDR_PLUGIN_STATE_DIR"); dir != "" {
+		return filepath.Join(dir, "pins.json")
+	}
+	return filepath.Join(ConfigDir(), "pins.json")
 }
 
 func loadPins(path string) (*pins, error) {

@@ -12,12 +12,16 @@ import (
 	"github.com/chriopter/lazyherd/internal/repo"
 )
 
-// newTestModel builds a model outside of any Herdr pane or workspace.
+// newTestModel builds a model as if started in pane "own" of workspace "w",
+// with the companion pane already up so key bindings take their usual path.
 func newTestModel(t *testing.T) Model {
 	t.Helper()
-	t.Setenv("HERDR_WORKSPACE_ID", "")
-	t.Setenv("HERDR_PANE_ID", "")
-	return newModel(t.TempDir(), filepath.Join(t.TempDir(), "pins.json"))
+	t.Setenv("HERDR_WORKSPACE_ID", "w")
+	t.Setenv("HERDR_PANE_ID", "own")
+	m := newModel(t.TempDir(), filepath.Join(t.TempDir(), "pins.json"))
+	m.herdr = herdr.State{Workspace: "w"}
+	m.starting = false
+	return m
 }
 
 // run drives a command through Update the way Bubble Tea would.
@@ -203,12 +207,16 @@ func herdrStateWith(t *testing.T, root, workspace string, repos ...string) herdr
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return herdr.Load(root)
+	t.Setenv("HERDR_BIN_PATH", "") // the fake must win even when the tests run in a Herdr pane
+	st, err := herdr.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
 }
 
 func TestWorkspaceGroupingToggleAndPins(t *testing.T) {
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
-	t.Setenv("HERDR_PANE_ID", "")
 	root := t.TempDir()
 	m := newModel(root, filepath.Join(t.TempDir(), "pins.json"))
 	m.setRepos([]repo.Repo{{Name: "a", Status: repo.Status{Changes: []repo.Change{{Path: "x"}}}}, {Name: "b"}, {Name: "c"}})

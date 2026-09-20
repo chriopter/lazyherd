@@ -23,15 +23,16 @@ func scriptOnPath(t *testing.T, name, script string) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HERDR_BIN_PATH", "") // the fake must win even when the tests run in a Herdr pane
 }
 
 func TestLoadExcludesRootAndOutsideAndFallsBackToWorkspaceID(t *testing.T) {
 	root := t.TempDir()
 	fakeHerdr(t, root)
 	t.Setenv("HERDR_WORKSPACE_ID", "w2")
-	st := Load(root)
-	if !st.Available || st.WorkspaceLabel() != "w2" {
-		t.Fatalf("state: %+v", st)
+	st, err := Load(root)
+	if err != nil || st.WorkspaceLabel() != "w2" {
+		t.Fatalf("state: %+v, %v", st, err)
 	}
 	if len(st.panes) != 2 || len(st.panes["api"]) != 1 || len(st.panes["web"]) != 1 {
 		t.Fatalf("mapped root or outside pane: %+v", st.panes)
@@ -49,9 +50,9 @@ func TestLoadMalformedResponses(t *testing.T) {
 		t.Run(out, func(t *testing.T) {
 			scriptOnPath(t, "herdr", "printf '%s' '"+out+"'\n")
 			t.Setenv("HERDR_WORKSPACE_ID", "w")
-			st := Load(t.TempDir())
-			if st.Available || len(st.panes) != 0 || st.WorkspaceLabel() != "w" {
-				t.Fatalf("got %+v", st)
+			st, err := Load(t.TempDir())
+			if err == nil || len(st.panes) != 0 || st.WorkspaceLabel() != "w" {
+				t.Fatalf("got %+v, %v", st, err)
 			}
 		})
 	}
@@ -60,9 +61,9 @@ func TestLoadMalformedResponses(t *testing.T) {
 func TestLoadKeepsPanesWhenWorkspaceLookupFails(t *testing.T) {
 	scriptOnPath(t, "herdr", `case "$1" in pane) printf '%s' '{"result":{"panes":[{"pane_id":"p","cwd":"/repos/a","workspace_id":"w"}]}}';; *) exit 1;; esac`)
 	t.Setenv("HERDR_WORKSPACE_ID", "w")
-	st := Load("/repos")
-	if !st.Available || st.Pane("a", "w") == nil || st.WorkspaceLabel() != "w" {
-		t.Fatalf("got %+v", st)
+	st, err := Load("/repos")
+	if err != nil || st.Pane("a", "w") == nil || st.WorkspaceLabel() != "w" {
+		t.Fatalf("got %+v, %v", st, err)
 	}
 }
 

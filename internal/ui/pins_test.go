@@ -58,3 +58,17 @@ func TestPinsLoadNullAndBroken(t *testing.T) {
 		t.Fatal("broken JSON should be reported")
 	}
 }
+
+func TestPluginDirectoriesWin(t *testing.T) {
+	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", "")
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", "/xdg")
+	if ConfigDir() != "/xdg/lazyherd" || pinsPath() != "/xdg/lazyherd/pins.json" {
+		t.Fatalf("without the plugin: %s, %s", ConfigDir(), pinsPath())
+	}
+	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", "/cfg")
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", "/state")
+	if ConfigDir() != "/cfg" || pinsPath() != "/state/pins.json" {
+		t.Fatalf("as a plugin: %s, %s", ConfigDir(), pinsPath())
+	}
+}

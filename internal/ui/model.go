@@ -27,9 +27,10 @@ type Model struct {
 	herdr   herdr.State
 	pins    *pins
 
-	ownPane       string         // HERDR_PANE_ID when running inside Herdr
-	companionPane string         // Herdr pane running the follower, "" without one
+	ownPane       string         // HERDR_PANE_ID, the pane lazyherd runs in
+	companionPane string         // Herdr pane running the follower, "" until it is up
 	companion     io.WriteCloser // connection to the follower
+	starting      bool           // companion pane is on its way
 	selSeq        int            // bumped on every selection change, for debouncing
 	shown         string         // repo the companion currently shows
 
@@ -65,7 +66,8 @@ func newModel(root, pinPath string) Model {
 		theme:    newTheme(defaultConfig()),
 		version:  "dev",
 		gen:      1,
-		activity: "scanning",
+		activity: "scanning", // Init scans …
+		starting: true,       // … and opens the companion pane
 	}
 	if err != nil {
 		m.status = "pins: " + err.Error()
@@ -73,13 +75,18 @@ func newModel(root, pinPath string) Model {
 	return m
 }
 
-// Init starts the first scan, the Herdr companion pane and the timers.
+// Init starts the first scan, the companion pane and the timers.
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{scanCmd(m.gen, m.root), herdrCmd(m.gen, m.root), refreshTick(), fetchTick(), spinTick()}
-	if m.ownPane != "" {
-		cmds = append(cmds, companionCmd(m.root, m.ownPane))
+	return tea.Batch(scanCmd(m.gen, m.root), herdrCmd(m.gen, m.root), refreshTick(), fetchTick(), spinTick(), companionCmd(m.root, m.ownPane))
+}
+
+// restartCompanion opens the lazygit pane again after it was lost.
+func (m *Model) restartCompanion() tea.Cmd {
+	if m.starting {
+		return nil
 	}
-	return tea.Batch(cmds...)
+	m.starting = true
+	return companionCmd(m.root, m.ownPane)
 }
 
 // scanCmds starts a scan unless something else is running.
@@ -110,9 +117,6 @@ func (m Model) currentDir() string { return filepath.Join(m.root, m.current().Na
 // inWorkspace reports whether a repo belongs to the current Herdr workspace:
 // Herdr has a pane in it, or the user pinned it.
 func (m Model) inWorkspace(name string) bool {
-	if m.herdr.Workspace == "" {
-		return false
-	}
 	return m.herdr.Pane(name, m.herdr.Workspace) != nil || m.pinned(name)
 }
 
@@ -145,7 +149,7 @@ func (m *Model) applyFilter(keep string) {
 		}
 		m.visible = append(m.visible, i)
 	}
-	if m.herdr.Workspace != "" && !m.workspaceOnly {
+	if !m.workspaceOnly {
 		sort.SliceStable(m.visible, func(a, b int) bool {
 			return m.inWorkspace(m.repos[m.visible[a]].Name) && !m.inWorkspace(m.repos[m.visible[b]].Name)
 		})
@@ -175,15 +179,16 @@ func (m *Model) selected() tea.Cmd {
 	return selectionTick(m.selSeq)
 }
 
-// showCurrent tells the companion pane to open the selected repo.
+// showCurrent tells the companion pane to open the selected repo. A dead
+// connection drops the companion, so that Enter opens a new one.
 func (m *Model) showCurrent() {
 	r := m.current()
 	if m.companion == nil || r == nil || r.Name == m.shown {
 		return
 	}
 	if err := herdr.SendSelection(m.companion, m.currentDir()); err != nil {
-		m.status = "companion: " + err.Error()
-		m.companion = nil
+		m.status = "lazygit pane is gone, Enter opens a new one"
+		m.companion, m.companionPane, m.shown = nil, "", ""
 		return
 	}
 	m.shown = r.Name
@@ -232,15 +237,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.gen {
 			return m, nil
 		}
-		m.herdr = msg.state
-		if m.workspaceOnly && !m.herdr.Available {
-			m.workspaceOnly = false
-			m.status = "herdr not reachable, showing all repos"
+		if msg.err != nil {
+			// Keep what we knew; the next refresh asks again.
+			m.status = "herdr: " + msg.err.Error()
+			return m, nil
 		}
+		m.herdr = msg.state
 		m.refilter()
 		return m, m.selected()
 
 	case companionMsg:
+		m.starting = false
 		if msg.err != nil {
 			m.status = "no companion pane: " + msg.err.Error()
 			return m, nil
@@ -281,12 +288,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case syncDoneMsg:
 		m.activity = ""
 		m.status = syncSummary(msg)
-		return m, m.rescan()
-
-	case lazygitDoneMsg:
-		if msg.err != nil {
-			m.status = "lazygit: " + msg.err.Error()
-		}
 		return m, m.rescan()
 
 	case tabCreatedMsg:
@@ -381,12 +382,10 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "w":
-		if m.herdr.Workspace != "" && m.herdr.Available {
-			m.workspaceOnly = !m.workspaceOnly
-			m.refilter()
-		}
+		m.workspaceOnly = !m.workspaceOnly
+		m.refilter()
 	case " ":
-		if r := m.current(); r != nil && m.herdr.Workspace != "" {
+		if r := m.current(); r != nil {
 			if err := m.pins.toggle(m.herdr.WorkspaceLabel(), r.Name); err != nil {
 				m.status = "pins: " + err.Error()
 			}
@@ -397,12 +396,12 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.current() == nil {
 			break
 		}
-		if m.companionPane != "" {
-			m.showCurrent()
-			pane := m.ownPane
-			return m, func() tea.Msg { _ = herdr.FocusRight(pane); return nil }
+		if m.companionPane == "" {
+			return m, m.restartCompanion()
 		}
-		return m, lazygitCmd(m.currentDir())
+		m.showCurrent()
+		pane := m.ownPane
+		return m, func() tea.Msg { _ = herdr.FocusRight(pane); return nil }
 
 	case "t":
 		return m, m.jumpToHerdr()
@@ -435,7 +434,7 @@ func syncSummary(results []repo.SyncResult) string {
 // jumpToHerdr focuses the Herdr tab holding the selected repo, or opens one.
 func (m Model) jumpToHerdr() tea.Cmd {
 	r := m.current()
-	if r == nil || !m.herdr.Available {
+	if r == nil {
 		return nil
 	}
 	if p := m.herdr.Pane(r.Name, m.herdr.Workspace); p != nil {

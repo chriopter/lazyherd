@@ -2,7 +2,6 @@ package ui
 
 import (
 	"net"
-	"os/exec"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,12 +20,12 @@ type (
 	herdrMsg struct {
 		gen   int
 		state herdr.State
+		err   error
 	}
-	fetchDoneMsg   struct{ failed []string }
-	syncDoneMsg    []repo.SyncResult
-	lazygitDoneMsg struct{ err error }
-	tabCreatedMsg  struct{ name string }
-	companionMsg   struct {
+	fetchDoneMsg  struct{ failed []string }
+	syncDoneMsg   []repo.SyncResult
+	tabCreatedMsg struct{ name string }
+	companionMsg  struct {
 		pane string
 		conn net.Conn
 		err  error
@@ -74,7 +73,10 @@ func scanCmd(gen int, root string) tea.Cmd {
 }
 
 func herdrCmd(gen int, root string) tea.Cmd {
-	return func() tea.Msg { return herdrMsg{gen: gen, state: herdr.Load(root)} }
+	return func() tea.Msg {
+		state, err := herdr.Load(root)
+		return herdrMsg{gen: gen, state: state, err: err}
+	}
 }
 
 func fetchCmd(root string, repos []repo.Repo) tea.Cmd {
@@ -83,10 +85,6 @@ func fetchCmd(root string, repos []repo.Repo) tea.Cmd {
 
 func syncCmd(root string, repos []repo.Repo) tea.Cmd {
 	return func() tea.Msg { return syncDoneMsg(repo.SyncAll(root, repos)) }
-}
-
-func lazygitCmd(dir string) tea.Cmd {
-	return tea.ExecProcess(exec.Command("lazygit", "-p", dir), func(err error) tea.Msg { return lazygitDoneMsg{err: err} })
 }
 
 // companionCmd splits a pane to the right of ours in Herdr and starts the

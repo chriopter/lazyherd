@@ -98,13 +98,9 @@ func (m Model) statusPanel() string {
 }
 
 func (m Model) reposPanel(height int) string {
-	subtitle := ""
-	if m.herdr.Workspace != "" && m.herdr.Available {
-		if m.workspaceOnly {
-			subtitle = "⌂ " + m.herdr.WorkspaceLabel()
-		} else {
-			subtitle = "⌂ " + m.herdr.WorkspaceLabel() + " (all)"
-		}
+	subtitle := "⌂ " + m.herdr.WorkspaceLabel()
+	if !m.workspaceOnly {
+		subtitle += " (all)"
 	}
 	title := "Repos"
 	if m.filter != "" {
@@ -182,10 +178,10 @@ func (m Model) columns(width int) (nameW, branchW int, age bool) {
 	return nameW, branchW, age
 }
 
-// groupWidth is the width of the workspace marker column, shown only when a
-// Herdr workspace is known and the list mixes its repos with the others.
+// groupWidth is the width of the workspace marker column, shown only when
+// the list mixes the workspace's repos with the others.
 func (m Model) groupWidth() int {
-	if m.herdr.Workspace != "" && m.herdr.Available && !m.workspaceOnly {
+	if !m.workspaceOnly {
 		return 2
 	}
 	return 0
@@ -298,21 +294,16 @@ func (m Model) bottomLine() string {
 
 func (m Model) options() string {
 	type opt struct{ desc, key string }
-	opts := []opt{{"Open", "<enter>"}, {"Sync", "p"}, {"Sync listed", "P"}, {"Filter", "/"}}
-	if m.herdr.Available {
-		opts = append(opts, opt{"Herdr tab", "t"})
+	opts := []opt{{"Open", "<enter>"}, {"Sync", "p"}, {"Sync listed", "P"}, {"Filter", "/"}, {"Herdr tab", "t"}}
+	if m.workspaceOnly {
+		opts = append(opts, opt{"All repos", "w"})
+	} else {
+		opts = append(opts, opt{"Workspace", "w"})
 	}
-	if m.herdr.Workspace != "" && m.herdr.Available {
-		if m.workspaceOnly {
-			opts = append(opts, opt{"All repos", "w"})
-		} else {
-			opts = append(opts, opt{"Workspace", "w"})
-		}
-		if r := m.current(); r != nil && m.pinned(r.Name) {
-			opts = append(opts, opt{"Unpin", "<space>"})
-		} else {
-			opts = append(opts, opt{"Pin", "<space>"})
-		}
+	if r := m.current(); r != nil && m.pinned(r.Name) {
+		opts = append(opts, opt{"Unpin", "<space>"})
+	} else {
+		opts = append(opts, opt{"Pin", "<space>"})
 	}
 	opts = append(opts, opt{"Quit", "q"})
 

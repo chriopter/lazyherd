@@ -1,7 +1,7 @@
-.PHONY: build test lint install
+.PHONY: build test lint link install
 
 build:
-	go build -o lazyherd .
+	go build -o bin/lazyherd .
 
 test:
 	go test ./...
@@ -9,6 +9,9 @@ test:
 
 lint:
 	test -z "$$(gofmt -l .)" && go vet ./...
+
+link: build
+	herdr plugin link "$(CURDIR)"
 
 install:
 	go install .

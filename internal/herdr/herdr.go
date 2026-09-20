@@ -22,15 +22,24 @@ type Pane struct {
 	TabID       string `json:"tab_id"`
 	WorkspaceID string `json:"workspace_id"`
 	Cwd         string `json:"cwd"`
+	Label       string `json:"label"`
 }
 
 // State is what lazyherd knows about the running Herdr server.
 type State struct {
-	Available bool
-	Workspace string // HERDR_WORKSPACE_ID when running inside a Herdr pane
+	Workspace string // HERDR_WORKSPACE_ID of the pane lazyherd runs in
 
 	panes          map[string][]Pane // repo name -> panes inside it
 	workspaceLabel string
+}
+
+// binary is the herdr executable: the one that started us as a plugin, or
+// whatever is on PATH.
+func binary() string {
+	if bin := os.Getenv("HERDR_BIN_PATH"); bin != "" {
+		return bin
+	}
+	return "herdr"
 }
 
 // run executes a herdr subcommand; a failure carries the last line herdr
@@ -38,7 +47,7 @@ type State struct {
 func run(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "herdr", args...)
+	cmd := exec.CommandContext(ctx, binary(), args...)
 	cmd.WaitDelay = time.Second
 	out, err := cmd.Output()
 	var exit *exec.ExitError
@@ -90,20 +99,17 @@ func call(result any, args ...string) error {
 }
 
 // Load maps every Herdr pane to the repository under root containing its cwd.
-// A missing or stopped Herdr yields an empty, unavailable state.
-func Load(root string) State {
+// When Herdr cannot be asked, the state is empty and the error says why.
+func Load(root string) (State, error) {
 	st := State{
 		Workspace: os.Getenv("HERDR_WORKSPACE_ID"),
 		panes:     map[string][]Pane{},
 	}
-	var paneList struct {
-		Panes []Pane `json:"panes"`
+	panes, err := listPanes()
+	if err != nil {
+		return st, err
 	}
-	if err := call(&paneList, "pane", "list"); err != nil {
-		return st
-	}
-	st.Available = true
-	for _, p := range paneList.Panes {
+	for _, p := range panes {
 		rel, err := filepath.Rel(root, p.Cwd)
 		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
 			continue
@@ -125,7 +131,17 @@ func Load(root string) State {
 			}
 		}
 	}
-	return st
+	return st, nil
+}
+
+func listPanes() ([]Pane, error) {
+	var list struct {
+		Panes []Pane `json:"panes"`
+	}
+	if err := call(&list, "pane", "list"); err != nil {
+		return nil, err
+	}
+	return list.Panes, nil
 }
 
 // Pane returns the first pane inside a repo, optionally restricted to a workspace.
@@ -182,4 +198,20 @@ func CreateTab(workspace, dir, label string) error {
 		args = append(args, "--workspace", workspace)
 	}
 	return do(args...)
+}
+
+// OpenCockpit brings the workspace's cockpit pane to the front, opening the
+// plugin's pane entrypoint when there is none yet. Herdr labels a plugin pane
+// with its manifest title, which is how an existing one is recognised.
+func OpenCockpit(plugin, entrypoint, label, workspace string) error {
+	panes, err := listPanes()
+	if err != nil {
+		return err
+	}
+	for _, p := range panes {
+		if p.WorkspaceID == workspace && p.Label == label {
+			return do("plugin", "pane", "focus", p.ID)
+		}
+	}
+	return do("plugin", "pane", "open", "--plugin", plugin, "--entrypoint", entrypoint, "--workspace", workspace, "--focus")
 }

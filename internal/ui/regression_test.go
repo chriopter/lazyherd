@@ -224,6 +224,7 @@ func uiHerdrLog(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HERDR_BIN_PATH", "") // the fake must win even when the tests run in a Herdr pane
 	return log
 }
 
@@ -232,26 +233,36 @@ func TestEnterWithAndWithoutCompanion(t *testing.T) {
 		t.Run(k.String(), func(t *testing.T) {
 			m := newTestModel(t)
 			m.setRepos([]repo.Repo{{Name: "api"}})
-			_, cmd := m.Update(k)
-			if cmd == nil {
-				t.Fatal("standalone open returned no command")
-			}
-			// Bubble Tea owns execution of this opaque exec message.
-			if msg := cmd(); fmt.Sprintf("%T", msg) != "tea.execMsg" {
-				t.Fatalf("expected exec message, got %T", msg)
-			}
 			log := uiHerdrLog(t)
+			// Without a companion pane Enter opens one, once.
+			next, cmd := m.Update(k)
+			m = next.(Model)
+			if cmd == nil || !m.starting {
+				t.Fatal("missing companion pane was not restarted")
+			}
+			if msg := cmd(); fmt.Sprintf("%T", msg) != "ui.companionMsg" {
+				t.Fatalf("expected the companion result, got %T", msg)
+			}
+			raw, err := os.ReadFile(log)
+			if err != nil || !strings.HasPrefix(string(raw), "pane\nsplit\n") {
+				t.Fatalf("split call: %q %v", raw, err)
+			}
+			if _, cmd := m.Update(k); cmd != nil {
+				t.Fatal("second Enter started another companion")
+			}
+			os.Remove(log)
+
 			b := &selectionBuffer{}
 			m.companion = b
 			m.companionPane = "child"
-			m.ownPane = "own"
-			next, cmd := m.Update(k)
+			m.starting = false
+			next, cmd = m.Update(k)
 			m = next.(Model)
 			if m.shown != "api" || b.String() != filepath.Join(m.root, "api")+"\n" || cmd == nil {
 				t.Fatal("companion did not receive selection")
 			}
 			cmd()
-			raw, err := os.ReadFile(log)
+			raw, err = os.ReadFile(log)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -299,9 +310,8 @@ func TestTabBindingFocusesOrCreates(t *testing.T) {
 		})
 	}
 	m := newTestModel(t)
-	m.setRepos([]repo.Repo{{Name: "a"}})
 	if _, cmd := press(t, m, "t"); cmd != nil {
-		t.Fatal("tab opened without herdr")
+		t.Fatal("tab opened without a selected repo")
 	}
 }
 
@@ -338,9 +348,9 @@ func TestWorkspaceOrderAndPinPersistenceThroughModel(t *testing.T) {
 	if err != nil || loaded.has("w", "c") {
 		t.Fatal("unpin not persisted")
 	}
-	next, _ := m.Update(herdrMsg{gen: m.gen, state: herdr.State{}})
-	if next.(Model).workspaceOnly || len(next.(Model).visible) != 5 {
-		t.Fatal("lost herdr did not restore all repos")
+	next, _ := m.Update(herdrMsg{gen: m.gen, state: herdr.State{Workspace: "w"}, err: errors.New("gone")})
+	if got := names(next.(Model)); !reflect.DeepEqual(got, []string{"b", "d"}) || next.(Model).status != "herdr: gone" {
+		t.Fatalf("a failed herdr listing must keep the last known panes: %v", got)
 	}
 }
 
@@ -354,7 +364,7 @@ func TestMessageErrorsAndRecovery(t *testing.T) {
 		{scanMsg{gen: m.gen, err: errors.New("denied")}, "scan failed: denied"},
 		{companionMsg{err: errors.New("split failed")}, "no companion pane: split failed"},
 		{fetchDoneMsg{failed: []string{"a", "b"}}, "fetch failed for a, b"},
-		{lazygitDoneMsg{err: errors.New("missing")}, "lazygit: missing"},
+		{herdrMsg{gen: m.gen, err: errors.New("socket gone")}, "herdr: socket gone"},
 		{statusMsg("note"), "note"},
 	} {
 		next, _ := m.Update(tt.msg)
@@ -363,10 +373,10 @@ func TestMessageErrorsAndRecovery(t *testing.T) {
 		}
 	}
 	b := &selectionBuffer{err: errors.New("closed")}
-	m.companion = b
+	m.companion, m.companionPane, m.shown = b, "child", "old"
 	m.showCurrent()
-	if m.companion != nil || m.status != "companion: closed" || m.shown != "" {
-		t.Fatal("failed companion not disabled")
+	if m.companion != nil || m.companionPane != "" || !strings.Contains(m.status, "Enter opens a new one") || m.shown != "" {
+		t.Fatal("failed companion not dropped")
 	}
 }
 
@@ -430,7 +440,7 @@ func TestOptionsAndBottomLine(t *testing.T) {
 	}
 	m.width = 200
 	m.version = "1.2.3"
-	if got := m.bottomLine(); !strings.Contains(got, "Sync listed: P | Filter: / | Quit: q") || !strings.HasSuffix(got, "lazyherd 1.2.3") || lipgloss.Width(got) != 200 {
+	if got := m.bottomLine(); !strings.Contains(got, "Sync listed: P | Filter: / | Herdr tab: t | Workspace: w | Pin: <space> | Quit: q") || !strings.HasSuffix(got, "lazyherd 1.2.3") || lipgloss.Width(got) != 200 {
 		t.Fatalf("options %q", got)
 	}
 	m.status = "done"
@@ -471,7 +481,7 @@ func TestViewSupportedSizesStayWithinWidth(t *testing.T) {
 			if name == "workspace" {
 				m.filter = ""
 				m.filtering = false
-				m.herdr = herdr.State{Available: true, Workspace: strings.Repeat("long", 50)}
+				m.herdr = herdr.State{Workspace: strings.Repeat("long", 50)}
 				m.refilter()
 			}
 			for w := 24; w <= 120; w++ {
@@ -547,21 +557,22 @@ func TestSyncBindingsUseOnlyRequestedRepos(t *testing.T) {
 	}
 }
 
-func TestWorkspaceBindingsWithoutWorkspaceDoNothing(t *testing.T) {
-	for _, state := range []herdr.State{{}, {Available: true}, {Workspace: "w"}} {
-		m := newTestModel(t)
-		m.herdr = state
-		m.setRepos([]repo.Repo{{Name: "api"}})
-		m, _ = press(t, m, "w")
-		if m.workspaceOnly || len(m.visible) != 1 {
-			t.Fatal("workspace filter without available workspace")
-		}
-		if state.Workspace == "" {
-			m, _ = press(t, m, "space")
-			if len(m.pins.byWorkspace) != 0 {
-				t.Fatal("pin created without workspace")
-			}
-		}
+func TestWorkspaceBindingsBeforeHerdrAnswered(t *testing.T) {
+	// The workspace id comes from the environment, so w and Space work even
+	// before (or without) a successful pane listing.
+	m := newTestModel(t)
+	m.setRepos([]repo.Repo{{Name: "api"}})
+	m, _ = press(t, m, "w")
+	if !m.workspaceOnly || len(m.visible) != 0 {
+		t.Fatal("workspace view should be empty until a repo is pinned or opened")
+	}
+	m, _ = press(t, m, "w", "space")
+	if !m.pinned("api") || m.pins.byWorkspace["w"][0] != "api" {
+		t.Fatalf("pin not stored under the workspace id: %v", m.pins.byWorkspace)
+	}
+	m, _ = press(t, m, "w")
+	if len(m.visible) != 1 {
+		t.Fatal("pinned repo missing from the workspace view")
 	}
 }
 

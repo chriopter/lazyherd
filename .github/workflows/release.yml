@@ -18,6 +18,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - name: Check the tag against the plugin manifest
+        run: |
+          manifest=$(sed -n 's/^version = "\(.*\)"/\1/p' herdr-plugin.toml)
+          test "v$manifest" = "${GITHUB_REF_NAME}" || { echo "herdr-plugin.toml says $manifest, tag is ${GITHUB_REF_NAME}"; exit 1; }
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
