@@ -62,8 +62,11 @@ func TestPinsLoadNullAndBroken(t *testing.T) {
 func TestPluginDirectoriesWin(t *testing.T) {
 	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", "")
 	t.Setenv("HERDR_PLUGIN_STATE_DIR", "")
-	t.Setenv("XDG_CONFIG_HOME", "/xdg")
-	if ConfigDir() != "/xdg/lazyherd" || pinsPath() != "/xdg/lazyherd/pins.json" {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ConfigDir() != filepath.Join(base, "lazyherd") || pinsPath() != filepath.Join(base, "lazyherd", "pins.json") {
 		t.Fatalf("without the plugin: %s, %s", ConfigDir(), pinsPath())
 	}
 	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", "/cfg")

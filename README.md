@@ -30,21 +30,21 @@ The install downloads the release binary named by the plugin manifest
 is not out yet. Requires `git` and `lazygit` on your `PATH`. To update, run
 the install again.
 
-Bind the action to a key in Herdr's `config.toml`:
+Bind the action to a key in Herdr's `config.toml` (`prefix+g` is Herdr's
+goto by default, so pick a free one), then `herdr server reload-config`:
 
 ```toml
 [[keys.command]]
-key = "prefix+g"
+key = "prefix+shift+l"
 type = "plugin_action"
 command = "chriopter.lazyherd.open"
 description = "lazyherd"
 ```
 
-It is also listed in Herdr's action palette as "Open lazyherd".
-
 ## Use
 
-The action focuses the current workspace's lazyherd tab, or opens one. `q`
+The key focuses the current workspace's lazyherd tab, or opens one; so does
+`herdr plugin action invoke chriopter.lazyherd.open` from any pane. `q`
 closes it again, together with the lazygit pane.
 
 By default the directory scanned is `~/git`. To use another one, put it in
