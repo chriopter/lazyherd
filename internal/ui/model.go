@@ -443,6 +443,11 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.gitOp("pull", "pull", "--ff-only", "--quiet")
 	case "P":
 		return m, m.gitOp("push", "push", "--quiet")
+	case "w":
+		if m.herdr.Workspace != "" && m.herdr.Available {
+			m.workspaceOnly = !m.workspaceOnly
+			m.refilter()
+		}
 	case "c":
 		if r := m.current(); r != nil && r.Dirty() && m.busy == "" {
 			m.committing, m.commitMsg, m.commitBody = true, "", ""

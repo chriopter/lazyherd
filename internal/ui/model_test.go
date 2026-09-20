@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/chriopter/lazyherd/internal/herdr"
 	"github.com/chriopter/lazyherd/internal/repo"
 )
 
@@ -257,5 +258,29 @@ func TestReflow(t *testing.T) {
 	want := "Swap the README (fork notice, dev commands) for a minimal Hello World.\n\n• first bullet continued\n• second"
 	if got := reflow(in); got != want {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestWorkspaceToggle(t *testing.T) {
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	m := New(t.TempDir())
+	m.setRepos([]repo.Repo{{Name: "a"}, {Name: "b"}})
+	next, _ := m.Update(herdrMsg{gen: m.gen, state: herdr.State{Available: true, Workspace: "w1"}})
+	m = next.(Model)
+	if m.workspaceOnly {
+		t.Fatal("a workspace without repo panes should start with all repos")
+	}
+	if len(m.visible) != 2 {
+		t.Fatalf("want 2 visible, got %d", len(m.visible))
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	m = next.(Model)
+	if !m.workspaceOnly || len(m.visible) != 0 {
+		t.Fatalf("w should switch to workspace mode: only=%v visible=%d", m.workspaceOnly, len(m.visible))
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	m = next.(Model)
+	if m.workspaceOnly || len(m.visible) != 2 {
+		t.Fatal("w should switch back to all repos")
 	}
 }
