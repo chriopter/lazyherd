@@ -38,13 +38,11 @@ func newTheme(cfg lazygit.Config) theme {
 
 // Fixed colors lazygit uses regardless of theme, from its presentation code.
 var (
-	green   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	yellow  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	red     = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	magenta = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
-	cyan    = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
-	dim     = lipgloss.NewStyle().Faint(true)
-	bold    = lipgloss.NewStyle().Bold(true)
+	green  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	yellow = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	red    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	cyan   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	dim    = lipgloss.NewStyle().Faint(true)
 )
 
 // spinner is lazygit's default loader.
