@@ -163,7 +163,7 @@ func TestFollowSocketCloseAndSIGTERM(t *testing.T) {
 			name = "SIGTERM"
 		}
 		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := shortDir(t)
 			socket := filepath.Join(dir, "f.sock")
 			log := filepath.Join(dir, "log")
 			t.Setenv("FOLLOW_LOG", log)
@@ -206,7 +206,7 @@ func TestFollowSocketCloseAndSIGTERM(t *testing.T) {
 
 func TestStartCompanionProtocol(t *testing.T) {
 	requireUnixSockets(t)
-	dir := t.TempDir()
+	dir := shortDir(t)
 	socket := filepath.Join(dir, "lazyherd-own.sock")
 	t.Setenv("XDG_RUNTIME_DIR", dir)
 	log := filepath.Join(dir, "calls")
@@ -310,9 +310,21 @@ func TestDialAndSelectionErrors(t *testing.T) {
 
 // Some restricted runners prohibit AF_UNIX. Skip only that platform restriction;
 // all other socket failures remain failures (including path length and timeouts).
+// shortDir returns a temp dir whose socket paths stay under the Unix socket
+// path limit, which t.TempDir() exceeds on macOS.
+func shortDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "lh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 func requireUnixSockets(t *testing.T) {
 	t.Helper()
-	listener, err := net.Listen("unix", filepath.Join(t.TempDir(), "probe.sock"))
+	listener, err := net.Listen("unix", filepath.Join(shortDir(t), "probe.sock"))
 	if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
 		t.Skipf("runner prohibits Unix sockets: %v", err)
 	}

@@ -2,6 +2,7 @@ package herdr
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -139,11 +141,10 @@ func StartCompanion(root, ownPane string, ratio float64) (string, net.Conn, erro
 		_ = ClosePane(pane)
 		return "", nil, err
 	}
-	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
-	if runtimeDir == "" {
-		runtimeDir = os.TempDir()
+	socket, err := socketPath(ownPane)
+	if err != nil {
+		return fail(err)
 	}
-	socket := filepath.Join(runtimeDir, "lazyherd-"+ownPane+".sock")
 	if err := runInPane(pane, exe+" follow "+socket); err != nil {
 		return fail(err)
 	}
@@ -166,4 +167,20 @@ func dial(socket string, wait time.Duration) (net.Conn, error) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// socketPath picks a short path for the companion socket: Unix socket paths
+// are limited to about 100 bytes, and macOS temp dirs alone can exceed that.
+func socketPath(ownPane string) (string, error) {
+	name := "lazyherd-" + strings.NewReplacer(":", "-", "/", "-").Replace(ownPane) + ".sock"
+	for _, dir := range []string{os.Getenv("XDG_RUNTIME_DIR"), os.TempDir(), "/tmp"} {
+		if dir == "" {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		if len(p) < 100 {
+			return p, nil
+		}
+	}
+	return "", errors.New("no short enough directory for the companion socket")
 }
