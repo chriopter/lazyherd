@@ -30,9 +30,12 @@ type Model struct {
 
 	width, height int
 	loading       bool
-	fetching      bool
+	fetching      bool   // fetch all in progress
+	busy          string // running single-repo operation, e.g. "pull api"
 	filtering     bool   // typing into the name filter
 	filter        string // current name filter
+	committing    bool   // commit dialog open
+	commitMsg     string // message typed into the commit dialog
 	workspaceOnly bool   // only repos with a pane in the current Herdr workspace
 	status        string // transient note in the title bar
 }
@@ -179,6 +182,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 
+	case tabCreatedMsg:
+		m.status = "opened " + msg.name
+		return m, herdrCmd(m.gen, m.root) // the new pane changes the workspace view
+
+	case opDoneMsg:
+		m.busy = ""
+		cmd := m.rescan()
+		if msg.err != nil {
+			m.status = fmt.Sprintf("%s %s failed: %v", msg.op, msg.name, msg.err)
+		} else {
+			m.status = fmt.Sprintf("%s %s done", msg.op, msg.name)
+		}
+		return m, cmd
+
 	case statusMsg:
 		m.status = string(msg)
 
@@ -188,6 +205,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.filtering {
 			return m.updateFilter(msg)
+		}
+		if m.committing {
+			return m.updateCommit(msg)
 		}
 		return m.updateKeys(msg)
 	}
@@ -214,6 +234,33 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, m.loadPreview()
 }
 
+func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.committing, m.commitMsg = false, ""
+	case "enter":
+		if strings.TrimSpace(m.commitMsg) == "" {
+			return m, nil
+		}
+		r := m.current()
+		m.committing = false
+		m.busy = "commit " + r.Name
+		message := m.commitMsg
+		m.commitMsg = ""
+		return m, commitCmd(m.root, r.Name, message)
+	case "backspace":
+		if m.commitMsg != "" {
+			_, size := utf8.DecodeLastRuneInString(m.commitMsg)
+			m.commitMsg = m.commitMsg[:len(m.commitMsg)-size]
+		}
+	default:
+		if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
+			m.commitMsg += string(msg.Runes)
+		}
+	}
+	return m, nil
+}
+
 func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	switch msg.String() {
@@ -236,12 +283,22 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "/":
 		m.filtering = true
-	case "r":
+	case "r", "R":
 		return m, m.rescan()
-	case "f":
+	case "F":
 		if !m.fetching {
 			m.fetching = true
 			return m, fetchCmd(m.root, m.repos)
+		}
+	case "f":
+		return m, m.gitOp("fetch", "fetch", "--all", "--quiet")
+	case "p":
+		return m, m.gitOp("pull", "pull", "--ff-only", "--quiet")
+	case "P":
+		return m, m.gitOp("push", "push", "--quiet")
+	case "c":
+		if r := m.current(); r != nil && r.Dirty() && m.busy == "" {
+			m.committing, m.commitMsg = true, ""
 		}
 	case "w":
 		if m.herdr.Workspace != "" && m.herdr.Available {
@@ -258,6 +315,16 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.jumpToHerdr()
 	}
 	return m, m.loadPreview()
+}
+
+// gitOp starts a git operation in the selected repo unless one is running.
+func (m *Model) gitOp(op string, args ...string) tea.Cmd {
+	r := m.current()
+	if r == nil || m.busy != "" || r.Err != nil {
+		return nil
+	}
+	m.busy = op + " " + r.Name
+	return gitOpCmd(op, m.root, r.Name, args...)
 }
 
 // jumpToHerdr focuses the Herdr tab holding the selected repo, or opens one.

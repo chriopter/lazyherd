@@ -37,11 +37,26 @@ func (m Model) View() string {
 		left = paneStyle
 	}
 	line := lipgloss.NewStyle().MaxWidth(m.width)
-	return line.Render(m.title()) + "\n" +
-		lipgloss.JoinHorizontal(lipgloss.Top,
-			left.Width(leftW-2).Height(innerH).MaxHeight(paneH).Render(m.table(leftW-4, innerH)),
-			paneStyle.Width(rightW-2).Height(innerH).MaxHeight(paneH).Render(m.previewPane(rightW-4, innerH)),
-		) + "\n" + line.Render(m.help())
+	body := lipgloss.JoinHorizontal(lipgloss.Top,
+		left.Width(leftW-2).Height(innerH).MaxHeight(paneH).Render(m.table(leftW-4, innerH)),
+		paneStyle.Width(rightW-2).Height(innerH).MaxHeight(paneH).Render(m.previewPane(rightW-4, innerH)),
+	)
+	if m.committing {
+		body = lipgloss.Place(m.width, paneH, lipgloss.Center, lipgloss.Center, m.commitDialog())
+	}
+	return line.Render(m.title()) + "\n" + body + "\n" + line.Render(m.help())
+}
+
+// commitDialog is the small box asking for a commit message.
+func (m Model) commitDialog() string {
+	r := m.current()
+	w := min(max(m.width*60/100, 50), m.width-4)
+	input := m.commitMsg + "▏"
+	body := previewTitleStyle.Render("Commit "+r.Name) + "  " +
+		dimStyle.Render(fmt.Sprintf("%d changes, all will be staged", r.Changes)) + "\n\n" +
+		lipgloss.NewStyle().MaxWidth(w-4).Render(input) + "\n\n" +
+		dimStyle.Render("enter commit · esc cancel")
+	return activePaneStyle.Width(w).Render(body)
 }
 
 func (m Model) title() string {
@@ -58,6 +73,8 @@ func (m Model) title() string {
 		t += dimStyle.Render("  ⟳ scanning")
 	case m.fetching:
 		t += dimStyle.Render("  ⇣ fetching all")
+	case m.busy != "":
+		t += dimStyle.Render("  ⟳ " + m.busy)
 	}
 	if m.herdr.Workspace != "" && m.herdr.Available {
 		if m.workspaceOnly {
@@ -177,15 +194,18 @@ func (m Model) previewPane(width, height int) string {
 
 func (m Model) help() string {
 	k := func(key, desc string) string { return keyStyle.Render(key) + dimStyle.Render(" "+desc) }
-	keys := []string{k("↵", "lazygit"), k("/", "filter"), k("f", "fetch all"), k("r", "refresh")}
+	if m.committing {
+		return " " + k("↵", "commit") + dimStyle.Render(" · ") + k("esc", "cancel")
+	}
+	keys := []string{k("↵", "lazygit"), k("c", "commit"), k("p", "pull"), k("P", "push"), k("f", "fetch"), k("F", "fetch all"), k("R", "refresh"), k("/", "filter")}
 	if m.herdr.Available {
-		keys = append(keys, k("t", "herdr tab"))
+		keys = append(keys, k("t", "herdr"))
 	}
 	if m.herdr.Workspace != "" && m.herdr.Available {
-		keys = append(keys, k("w", "workspace/all"))
+		keys = append(keys, k("w", "workspace"))
 	}
 	keys = append(keys, k("q", "quit"))
-	return " " + strings.Join(keys, dimStyle.Render("  ·  "))
+	return " " + strings.Join(keys, dimStyle.Render(" · "))
 }
 
 // tilde shortens a path under $HOME to ~/... for display.

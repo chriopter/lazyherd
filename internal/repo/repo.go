@@ -114,18 +114,16 @@ func scanOne(name, dir string) Repo {
 	return r
 }
 
-// FetchAll runs git fetch in every repository with an upstream and returns
-// the names of the ones whose fetch failed.
+// FetchAll runs git fetch --all in every repository and returns the names of
+// the ones whose fetch failed. Repositories without remotes fetch nothing
+// and succeed.
 func FetchAll(root string, repos []Repo) []string {
 	var (
 		mu     sync.Mutex
 		failed []string
 	)
 	parallel(repos, func(_ int, r Repo) {
-		if r.NoUpstream || r.Err != nil {
-			return
-		}
-		if _, err := git(fetchTimeout, filepath.Join(root, r.Name), "fetch", "--quiet"); err != nil {
+		if _, err := git(fetchTimeout, filepath.Join(root, r.Name), "fetch", "--all", "--quiet"); err != nil {
 			mu.Lock()
 			failed = append(failed, r.Name)
 			mu.Unlock()
@@ -136,11 +134,33 @@ func FetchAll(root string, repos []Repo) []string {
 }
 
 // Preview returns the colored short status and recent log of one repository.
+// A failing git command is reported in place of its output.
 func Preview(dir string, commits int) (status, log string) {
-	status, _ = git(gitTimeout, dir, "-c", "color.status=always", "status", "-sb")
-	log, _ = git(gitTimeout, dir, "log", "--color=always", "--date=relative", fmt.Sprintf("-%d", commits),
+	status, err := git(gitTimeout, dir, "-c", "color.status=always", "status", "-sb")
+	if err != nil {
+		status = "git status failed: " + err.Error()
+	}
+	log, err = git(gitTimeout, dir, "log", "--color=always", "--date=relative", fmt.Sprintf("-%d", commits),
 		"--pretty=format:%C(yellow)%h%C(reset) %C(dim)%ad%C(reset) %s")
+	if err != nil {
+		log = "git log failed: " + err.Error()
+	}
 	return status, log
+}
+
+// Run executes one git command in dir, for pull, push and single fetches.
+func Run(dir string, args ...string) error {
+	_, err := git(fetchTimeout, dir, args...)
+	return err
+}
+
+// Commit stages everything in dir and commits it with the given message.
+func Commit(dir, message string) error {
+	if _, err := git(gitTimeout, dir, "add", "-A"); err != nil {
+		return err
+	}
+	_, err := git(fetchTimeout, dir, "commit", "-q", "-m", message)
+	return err
 }
 
 // Lazygit returns the command that opens lazygit in dir.

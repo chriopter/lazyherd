@@ -27,7 +27,12 @@ type (
 	}
 	fetchDoneMsg   struct{ failed []string }
 	lazygitDoneMsg struct{ err error }
-	statusMsg      string
+	tabCreatedMsg  struct{ name string }
+	opDoneMsg      struct {
+		op, name string
+		err      error
+	}
+	statusMsg string
 )
 
 const previewCommits = 14
@@ -54,6 +59,19 @@ func fetchCmd(root string, repos []repo.Repo) tea.Cmd {
 	return func() tea.Msg { return fetchDoneMsg{failed: repo.FetchAll(root, repos)} }
 }
 
+// gitOpCmd runs a named git operation in one repo, for p, P and f.
+func gitOpCmd(op, root, name string, args ...string) tea.Cmd {
+	return func() tea.Msg {
+		return opDoneMsg{op: op, name: name, err: repo.Run(filepath.Join(root, name), args...)}
+	}
+}
+
+func commitCmd(root, name, message string) tea.Cmd {
+	return func() tea.Msg {
+		return opDoneMsg{op: "commit", name: name, err: repo.Commit(filepath.Join(root, name), message)}
+	}
+}
+
 func lazygitCmd(dir string) tea.Cmd {
 	return tea.ExecProcess(repo.Lazygit(dir), func(err error) tea.Msg { return lazygitDoneMsg{err: err} })
 }
@@ -72,6 +90,6 @@ func createTabCmd(workspace, dir, name string) tea.Cmd {
 		if err := herdr.CreateTab(workspace, dir, name); err != nil {
 			return statusMsg("herdr: " + err.Error())
 		}
-		return statusMsg("opened " + name)
+		return tabCreatedMsg{name: name}
 	}
 }

@@ -40,11 +40,13 @@ func call(args ...string) (map[string]any, error) {
 	return v.Result, nil
 }
 
-func decode[T any](v any) T {
+func decode[T any](v any) (T, error) {
 	var t T
-	raw, _ := json.Marshal(v)
-	json.Unmarshal(raw, &t)
-	return t
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return t, err
+	}
+	return t, json.Unmarshal(raw, &t)
 }
 
 // Load maps every Herdr pane to the repository under root containing its cwd.
@@ -59,8 +61,12 @@ func Load(root string) State {
 	if err != nil {
 		return st
 	}
+	panes, err := decode[[]Pane](res["panes"])
+	if err != nil {
+		return st
+	}
 	st.Available = true
-	for _, p := range decode[[]Pane](res["panes"]) {
+	for _, p := range panes {
 		rel, err := filepath.Rel(root, p.Cwd)
 		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
 			continue
@@ -73,8 +79,10 @@ func Load(root string) State {
 			ID    string `json:"workspace_id"`
 			Label string `json:"label"`
 		}
-		for _, w := range decode[[]workspace](ws["workspaces"]) {
-			st.labels[w.ID] = w.Label
+		if list, err := decode[[]workspace](ws["workspaces"]); err == nil {
+			for _, w := range list {
+				st.labels[w.ID] = w.Label
+			}
 		}
 	}
 	return st

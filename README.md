@@ -30,22 +30,32 @@ source needs Go 1.24 or newer. `git` and `lazygit` must be on your `PATH`.
 ```sh
 lazyherd            # scans ~/git
 lazyherd ~/code     # or any directory of repos
+lh                  # same thing, shipped in the release archives
 ```
+
+With `go install` only `lazyherd` is built; add `alias lh=lazyherd` to your
+shell if you want the short name.
 
 | Key | Action |
 |-----|--------|
 | `↵` | Open lazygit in the selected repo |
+| `c` | Stage everything and commit, asking for a message |
+| `p` | `git pull --ff-only` in the selected repo |
+| `P` | `git push` in the selected repo |
+| `f` | `git fetch --all` in the selected repo |
+| `F` | Fetch all repos |
+| `R` | Rescan |
 | `/` | Filter by name |
-| `f` | `git fetch` in all repos |
-| `r` | Rescan |
 | `t` | Jump to the repo's [Herdr](https://herdr.dev) tab, or open one |
 | `w` | Toggle between the current Herdr workspace and all repos |
 | `q` | Quit |
 
-Only the immediate subdirectories of DIR are scanned. Repos are sorted
+Only the immediate subdirectories of DIR are scanned; symlinked directories
+are skipped. Repos are sorted
 dirty first, then out of sync, then by name. Ahead/behind counts come from
-the local tracking refs, so they are only as fresh as the last fetch; `f`
-fetches every listed repo, including the ones hidden by a filter.
+the local tracking refs, so they are only as fresh as the last fetch; `F`
+runs `git fetch --all` in every scanned repo, including the ones hidden by
+a filter.
 
 To make `Esc` leave lazygit and return to the cockpit, add to
 `~/.config/lazygit/config.yml`:
