@@ -40,19 +40,31 @@ type Status struct {
 
 // status reads the repository state with a single git call.
 func status(dir string) (Status, error) {
-	out, err := git(gitTimeout, dir, "status", "--porcelain=v2", "--branch", "--untracked-files=all")
+	out, err := git(gitTimeout, dir, "status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z")
 	if err != nil {
 		return Status{}, err
 	}
 	return parseStatus(out), nil
 }
 
-// parseStatus parses git status --porcelain=v2 --branch output.
+// parseStatus parses git status --porcelain=v2 --branch output. With -z the
+// entries are NUL separated and paths come unquoted; a rename's old path
+// follows as a separate NUL field. Newline separated input is accepted too.
 func parseStatus(out string) Status {
 	st := Status{NoUpstream: true}
-	for _, line := range strings.Split(out, "\n") {
+	var entries []string
+	if strings.Contains(out, "\x00") {
+		entries = strings.Split(out, "\x00")
+	} else {
+		entries = strings.Split(out, "\n")
+	}
+	for i := 0; i < len(entries); i++ {
+		line := entries[i]
 		if line == "" {
 			continue
+		}
+		if line[0] == '2' && strings.Contains(out, "\x00") {
+			i++ // skip the rename's original path
 		}
 		switch line[0] {
 		case '#':
@@ -105,7 +117,7 @@ func parseChange(line string) (Change, bool) {
 	}
 	c.Path = strings.Join(fields[n:], " ")
 	if line[0] == '2' {
-		c.Path, _, _ = strings.Cut(c.Path, "\t")
+		c.Path, _, _ = strings.Cut(c.Path, "\t") // newline format: "new\told"
 	}
 	return c, true
 }

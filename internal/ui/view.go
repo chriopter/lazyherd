@@ -25,7 +25,8 @@ func (m Model) View() string {
 		return ""
 	}
 	if m.width < minWidth || m.height < minHeight {
-		return fmt.Sprintf("lazyherd needs at least %dx%d\n", minWidth, minHeight)
+		msg := fmt.Sprintf("lazyherd needs %dx%d", minWidth, minHeight)
+		return lipgloss.NewStyle().MaxWidth(m.width).Render(msg) + "\n"
 	}
 	listH := m.height - statusPanelH - 1 // options line
 	line := lipgloss.NewStyle().MaxWidth(m.width)
@@ -307,12 +308,18 @@ func (m Model) options() string {
 
 	width := m.width - 2
 	sep := " | "
+	more := sep + "…"
 	var b strings.Builder
 	length := 0
 	for i, o := range opts {
 		text := o.desc + ": " + o.key
-		if i > 0 && length+len(sep)+lipgloss.Width(text) > width {
-			b.WriteString(m.theme.options.Render(sep + "…"))
+		// Keep room for the ellipsis unless this is the last entry.
+		need := len(sep) + lipgloss.Width(text)
+		if i < len(opts)-1 {
+			need += len(more)
+		}
+		if i > 0 && length+need > width {
+			b.WriteString(m.theme.options.Render(more))
 			break
 		}
 		if i > 0 {
