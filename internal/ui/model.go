@@ -36,12 +36,9 @@ type Model struct {
 	version string
 	spin    int // spinner frame while something runs
 
-	gen           int  // bumped on every rescan; stale results are dropped
-	scanning      bool // a scan is in flight; ticks wait for it
+	gen           int    // bumped on every rescan; stale results are dropped
+	activity      string // what runs right now: "scanning", "fetching", "syncing …", or "" when idle
 	width, height int
-	loading       bool
-	fetching      bool   // background fetch in progress
-	busy          string // running sync, e.g. "sync api"
 	filtering     bool   // typing into the name filter
 	filter        string // current name filter
 	workspaceOnly bool   // only repos of the current Herdr workspace (w toggles)
@@ -60,13 +57,13 @@ func New(root, version string) Model {
 func newModel(root, pinPath string) Model {
 	store, err := loadPins(pinPath)
 	m := Model{
-		root:    root,
-		pins:    store,
-		ownPane: os.Getenv("HERDR_PANE_ID"),
-		theme:   newTheme(defaultConfig()),
-		version: "dev",
-		gen:     1,
-		loading: true,
+		root:     root,
+		pins:     store,
+		ownPane:  os.Getenv("HERDR_PANE_ID"),
+		theme:    newTheme(defaultConfig()),
+		version:  "dev",
+		gen:      1,
+		activity: "scanning",
 	}
 	if err != nil {
 		m.status = "pins: " + err.Error()
@@ -83,20 +80,19 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// scanCmds starts a scan unless one is already running.
+// scanCmds starts a scan unless something else is running.
 func (m *Model) scanCmds() tea.Cmd {
-	if m.scanning {
+	if !m.idle() {
 		return nil
 	}
-	m.scanning = true
+	m.activity = "scanning"
 	return tea.Batch(scanCmd(m.gen, m.root), herdrCmd(m.gen, m.root))
 }
 
 // rescan starts a new scan generation; a running scan's result is dropped.
 func (m *Model) rescan() tea.Cmd {
 	m.gen++
-	m.loading = true
-	m.scanning = false
+	m.activity = ""
 	return m.scanCmds()
 }
 
@@ -191,9 +187,17 @@ func (m *Model) showCurrent() {
 	m.shown = r.Name
 }
 
-// idle reports whether nothing is running that a background refresh could disturb.
-func (m Model) idle() bool {
-	return m.busy == "" && !m.fetching && !m.loading && !m.scanning
+// idle reports whether nothing is running that a background job could disturb.
+func (m Model) idle() bool { return m.activity == "" }
+
+// canSync reports whether a sync may start: not while another sync or a
+// fetch runs. A scan in flight is harmless, its result is simply refreshed.
+func (m Model) canSync() bool { return m.activity == "" || m.activity == "scanning" }
+
+// start records a running job and returns its command with the spinner.
+func (m *Model) start(activity string, cmd tea.Cmd) tea.Cmd {
+	m.activity = activity
+	return tea.Batch(cmd, spinTick())
 }
 
 // visibleRepos returns the repos currently listed, for the "all" actions.
@@ -214,7 +218,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.gen {
 			return m, nil
 		}
-		m.loading, m.scanning = false, false
+		m.activity = ""
 		if msg.err != nil {
 			m.status = "scan failed: " + msg.err.Error()
 		}
@@ -262,18 +266,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.idle() {
 			return m, fetchTick()
 		}
-		m.fetching = true
-		return m, tea.Batch(fetchCmd(m.root, m.repos), fetchTick(), spinTick())
+		return m, tea.Batch(m.start("fetching", fetchCmd(m.root, m.repos)), fetchTick())
 
 	case fetchDoneMsg:
-		m.fetching = false
+		m.activity = ""
 		if len(msg.failed) > 0 {
 			m.status = "fetch failed for " + strings.Join(msg.failed, ", ")
 		}
 		return m, m.scanCmds()
 
 	case syncDoneMsg:
-		m.busy = ""
+		m.activity = ""
 		m.status = syncSummary(msg)
 		return m, m.rescan()
 
@@ -366,14 +369,12 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filtering = true
 
 	case "p":
-		if r := m.current(); r != nil && m.busy == "" {
-			m.busy = "syncing " + r.Name
-			return m, tea.Batch(syncCmd(m.root, []repo.Repo{*r}), spinTick())
+		if r := m.current(); r != nil && m.canSync() {
+			return m, m.start("syncing "+r.Name, syncCmd(m.root, []repo.Repo{*r}))
 		}
 	case "P":
-		if m.busy == "" && len(m.visible) > 0 {
-			m.busy = fmt.Sprintf("syncing %d repos", len(m.visible))
-			return m, tea.Batch(syncCmd(m.root, m.visibleRepos()), spinTick())
+		if m.canSync() && len(m.visible) > 0 {
+			return m, m.start(fmt.Sprintf("syncing %d repos", len(m.visible)), syncCmd(m.root, m.visibleRepos()))
 		}
 
 	case "w":

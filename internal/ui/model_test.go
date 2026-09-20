@@ -63,8 +63,9 @@ func press(t *testing.T, m Model, keys ...string) (Model, tea.Cmd) {
 func TestInitialScanIsAccepted(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // no herdr
 	m := newTestModel(t)
+	m.activity = ""
 	m = run(t, m, m.scanCmds()) // Init also starts the timers, which a test must not wait for
-	if m.loading {
+	if !m.idle() {
 		t.Fatal("initial scan result was dropped")
 	}
 }
@@ -151,22 +152,22 @@ func TestSyncKeys(t *testing.T) {
 	m := newTestModel(t)
 	m.setRepos([]repo.Repo{{Name: "a"}, {Name: "b"}})
 	m, cmd := press(t, m, "p")
-	if cmd == nil || m.busy != "syncing a" {
-		t.Fatalf("p should sync the selected repo, busy=%q", m.busy)
+	if cmd == nil || m.activity != "syncing a" {
+		t.Fatalf("p should sync the selected repo, activity=%q", m.activity)
 	}
 	if _, cmd := press(t, m, "P"); cmd != nil {
 		t.Fatal("a second sync must wait for the first")
 	}
 	next, cmd := m.Update(syncDoneMsg{{Name: "a", Pushed: true}})
 	m = next.(Model)
-	if m.busy != "" || cmd == nil || !strings.Contains(m.status, "1 pushed") {
-		t.Fatalf("sync end should clear busy, report and rescan: busy=%q status=%q", m.busy, m.status)
+	if m.activity != "scanning" || cmd == nil || !strings.Contains(m.status, "1 pushed") {
+		t.Fatalf("sync end should report and rescan: activity=%q status=%q", m.activity, m.status)
 	}
 	m.filter = "b"
 	m.refilter()
 	m, _ = press(t, m, "P")
-	if m.busy != "syncing 1 repos" {
-		t.Fatalf("P should sync the listed repos only, busy=%q", m.busy)
+	if m.activity != "syncing 1 repos" {
+		t.Fatalf("P should sync the listed repos only, activity=%q", m.activity)
 	}
 }
 
@@ -179,7 +180,7 @@ func TestRefreshKeepsSelectionAndSkipsWhenBusy(t *testing.T) {
 	if m.current().Name != "b" {
 		t.Fatalf("selection lost on background rescan: %v", m.current())
 	}
-	m.busy = "syncing b"
+	m.activity = "syncing b"
 	if _, cmd := m.Update(refreshMsg{}); cmd == nil {
 		t.Fatal("refresh should at least re-arm its timer")
 	}

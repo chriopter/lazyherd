@@ -137,7 +137,7 @@ func TestNewLoadsSelectedConfigAndPinsPath(t *testing.T) {
 	t.Setenv("LG_CONFIG_FILE", config)
 	t.Setenv("CONFIG_DIR", filepath.Join(root, "missing"))
 	m := New(root, "test-version")
-	if m.theme.frame != frameRunes("bold") || m.version != "test-version" || m.ownPane != "own" || !m.loading {
+	if m.theme.frame != frameRunes("bold") || m.version != "test-version" || m.ownPane != "own" || m.activity != "scanning" {
 		t.Fatalf("New: %+v", m)
 	}
 	base, err := os.UserConfigDir()

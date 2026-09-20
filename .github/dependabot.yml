@@ -1,10 +1,20 @@
+# One pull request per week for all Go modules, one for all GitHub Actions.
+# Dependabot keeps each PR rebased until it is merged.
 version: 2
 updates:
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+      day: monday
+    groups:
+      go:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]

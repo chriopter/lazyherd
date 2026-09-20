@@ -89,7 +89,7 @@ func (m Model) statusPanel() string {
 			body += " "
 		}
 		body += r.Name + " → " + m.branchName(*r, false)
-	} else if m.loading {
+	} else if m.activity == "scanning" {
 		body = dim.Render("scanning " + spinner[m.spin%len(spinner)])
 	}
 	return m.frame(0, "Status", "", "", []string{body}, m.width, statusPanelH, m.border(false))
@@ -210,7 +210,7 @@ func (m Model) rows(width int) []string {
 	for i := start; i < len(m.visible) && i-start < count; i++ {
 		rows = append(rows, m.row(m.repos[m.visible[i]], i == m.cursor, nameW, branchW, width))
 	}
-	if len(m.visible) == 0 && !m.loading {
+	if len(m.visible) == 0 && m.activity != "scanning" {
 		rows = append(rows, dim.Render(" no repositories"))
 	}
 	return rows
@@ -272,9 +272,9 @@ func (m Model) bottomLine() string {
 	}
 	right := ""
 	switch {
-	case m.busy != "":
-		right = cyan.Render(m.busy + " " + spinner[m.spin%len(spinner)])
-	case m.fetching:
+	case strings.HasPrefix(m.activity, "syncing"):
+		right = cyan.Render(m.activity + " " + spinner[m.spin%len(spinner)])
+	case m.activity == "fetching":
 		right = dim.Render("fetching " + spinner[m.spin%len(spinner)])
 	default:
 		right = dim.Render("lazyherd " + m.version)

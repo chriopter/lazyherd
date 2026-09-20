@@ -89,7 +89,7 @@ func TestStaleMessagesLeaveStateUntouched(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			m := newTestModel(t)
 			m.setRepos([]repo.Repo{{Name: "keep"}})
-			m.scanning = true
+			m.activity = "scanning"
 			m.selSeq = 7
 			b := &selectionBuffer{}
 			m.companion = b
@@ -105,7 +105,7 @@ func TestStaleMessagesLeaveStateUntouched(t *testing.T) {
 			}
 			next, cmd := m.Update(msg)
 			got := next.(Model)
-			if cmd != nil || got.current().Name != "keep" || got.herdr.Workspace != "keep" || !got.scanning || !got.loading || got.status != "" || b.Len() != 0 {
+			if cmd != nil || got.current().Name != "keep" || got.herdr.Workspace != "keep" || got.activity != "scanning" || got.status != "" || b.Len() != 0 {
 				t.Fatalf("stale %s applied: %+v", kind, got)
 			}
 		})
@@ -113,28 +113,18 @@ func TestStaleMessagesLeaveStateUntouched(t *testing.T) {
 }
 
 func TestRefreshAndFetchWaitForAllBusyStates(t *testing.T) {
-	for _, state := range []string{"sync", "fetch", "load", "scan"} {
+	for _, state := range []string{"syncing api", "fetching", "scanning"} {
 		for _, event := range []string{"refresh", "fetch"} {
 			t.Run(state+"/"+event, func(t *testing.T) {
 				m := newTestModel(t)
-				m.loading = false
-				switch state {
-				case "sync":
-					m.busy = "syncing"
-				case "fetch":
-					m.fetching = true
-				case "load":
-					m.loading = true
-				case "scan":
-					m.scanning = true
-				}
+				m.activity = state
 				var msg tea.Msg = refreshMsg{}
 				if event == "fetch" {
 					msg = autoFetchMsg{}
 				}
 				next, cmd := m.Update(msg)
 				got := next.(Model)
-				if got.scanning != m.scanning || got.fetching != m.fetching || got.gen != m.gen || cmd == nil {
+				if got.activity != m.activity || got.gen != m.gen || cmd == nil {
 					t.Fatalf("busy state changed: %+v", got)
 				}
 				// Do not execute the returned timer: it deliberately waits 3 or 60 seconds.
@@ -142,16 +132,16 @@ func TestRefreshAndFetchWaitForAllBusyStates(t *testing.T) {
 		}
 	}
 	m := newTestModel(t)
-	m.loading = false
+	m.activity = ""
 	next, cmd := m.Update(refreshMsg{})
-	if !next.(Model).scanning || cmd == nil {
+	if next.(Model).activity != "scanning" || cmd == nil {
 		t.Fatal("idle refresh did not scan")
 	}
 	next, cmd = m.Update(autoFetchMsg{})
-	if !next.(Model).fetching || cmd == nil {
+	if next.(Model).activity != "fetching" || cmd == nil {
 		t.Fatal("idle fetch did not start")
 	}
-	m.scanning = true
+	m.activity = "scanning"
 	if m.scanCmds() != nil {
 		t.Fatal("duplicate scan started")
 	}
@@ -165,7 +155,7 @@ func TestSpinnerAdvancesOnlyWhileWorking(t *testing.T) {
 	if m.spin != 4 || cmd == nil {
 		t.Fatal("busy spinner did not advance and rearm")
 	}
-	m.loading = false
+	m.activity = ""
 	next, cmd = m.Update(spinMsg{})
 	if next.(Model).spin != 4 || cmd != nil {
 		t.Fatal("idle spinner continued")
@@ -426,7 +416,7 @@ func TestStatusPanelContent(t *testing.T) {
 	if !strings.Contains(m.statusPanel(), "scanning "+spinner[0]) {
 		t.Fatal("missing loading spinner")
 	}
-	m.loading = false
+	m.activity = ""
 	if strings.Contains(m.statusPanel(), "scanning") {
 		t.Fatal("idle empty panel says scanning")
 	}
@@ -452,12 +442,11 @@ func TestOptionsAndBottomLine(t *testing.T) {
 	if !strings.Contains(m.bottomLine(), "Filter: abc") {
 		t.Fatal("filter prompt missing")
 	}
-	m.busy = "syncing api"
+	m.activity = "syncing api"
 	if !strings.HasSuffix(m.bottomLine(), "syncing api "+spinner[0]) {
 		t.Fatal("busy indicator missing")
 	}
-	m.busy = ""
-	m.fetching = true
+	m.activity = "fetching"
 	if !strings.HasSuffix(m.bottomLine(), "fetching "+spinner[0]) {
 		t.Fatal("fetch indicator missing")
 	}
@@ -467,7 +456,10 @@ func TestViewSupportedSizesStayWithinWidth(t *testing.T) {
 	m := newTestModel(t)
 	for _, name := range []string{"empty", "loading", "repos", "filter", "workspace"} {
 		t.Run(name, func(t *testing.T) {
-			m.loading = name == "loading"
+			m.activity = ""
+			if name == "loading" {
+				m.activity = "scanning"
+			}
 			if name == "repos" || name == "filter" || name == "workspace" {
 				m.setRepos([]repo.Repo{{Name: strings.Repeat("日本語é", 20), Status: repo.Status{Branch: strings.Repeat("branch", 30), Ahead: 99, Behind: 99}}, {Name: "api"}})
 			}
