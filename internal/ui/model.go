@@ -1,8 +1,11 @@
-// Package ui is the Bubble Tea front end of lazyherd.
+// Package ui is the Bubble Tea front end of lazyherd: a list of repositories
+// that drives a lazygit pane next to it.
 package ui
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -10,26 +13,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/chriopter/lazyherd/internal/follow"
 	"github.com/chriopter/lazyherd/internal/herdr"
 	"github.com/chriopter/lazyherd/internal/pins"
 	"github.com/chriopter/lazyherd/internal/repo"
-)
-
-// preview is everything the right pane knows about one repository.
-type preview struct {
-	branch  string // "main...origin/main [ahead 1]"
-	changes []repo.Change
-	rows    []treeRow // changes laid out as a tree
-	files   []int     // indices of file rows
-	log     string
-	err     error
-}
-
-type pane int
-
-const (
-	paneRepos pane = iota
-	paneFiles
 )
 
 // Model is the whole application state.
@@ -39,28 +26,22 @@ type Model struct {
 	visible []int // indices into repos that pass the filters
 	cursor  int   // index into visible
 	herdr   herdr.State
+	pins    *pins.Store
 
-	focus      pane
-	fileCursor int         // index into preview.files of the selected repo
-	pins       *pins.Store // repos pinned to workspaces by hand
+	ownPane       string         // HERDR_PANE_ID when running inside Herdr
+	companionPane string         // Herdr pane running the follower, "" without one
+	companion     io.WriteCloser // connection to the follower
+	selSeq        int            // bumped on every selection change, for debouncing
+	shown         string         // repo the companion currently shows
 
-	gen      int                 // bumped on every rescan; stale results are dropped
-	previews map[string]preview  // cached by repo name for the current gen
-	pending  map[string]struct{} // previews requested but not yet received
-	diffs    map[string]string   // cached by repo name + path
-
+	gen           int // bumped on every rescan; stale results are dropped
 	width, height int
 	loading       bool
-	fetching      bool   // fetch all in progress
-	busy          string // running single-repo operation, e.g. "pull api"
+	fetching      bool   // background fetch in progress
+	busy          string // running sync, e.g. "sync api"
 	filtering     bool   // typing into the name filter
 	filter        string // current name filter
-	committing    bool   // commit dialog open
-	commitMsg     string // subject typed into the commit dialog
-	commitBody    string // description below the subject
-	commitField   int    // 0 subject, 1 description
-	generating    bool   // claude is writing a commit message
-	workspaceOnly bool   // only repos with a pane in the current Herdr workspace (w toggles)
+	workspaceOnly bool   // only repos of the current Herdr workspace (w toggles)
 	status        string // transient note in the title bar
 }
 
@@ -73,31 +54,31 @@ func New(root string) Model {
 func NewWithPins(root, pinPath string) Model {
 	store, _ := pins.Load(pinPath) // an unreadable file just means no pins
 	return Model{
-		pins:     store,
-		root:     root,
-		gen:      1,
-		loading:  true,
-		previews: map[string]preview{},
-		pending:  map[string]struct{}{},
-		diffs:    map[string]string{},
+		root:    root,
+		pins:    store,
+		ownPane: os.Getenv("HERDR_PANE_ID"),
+		gen:     1,
+		loading: true,
 	}
 }
 
-// Init starts the first scan and the refresh timers; New already set the
-// generation the scan belongs to.
-func (m Model) Init() tea.Cmd { return tea.Batch(m.scanCmds(), refreshTick(), fetchTick()) }
+// Init starts the first scan, the Herdr companion pane and the timers.
+func (m Model) Init() tea.Cmd {
+	cmds := []tea.Cmd{m.scanCmds(), refreshTick(), fetchTick()}
+	if m.ownPane != "" {
+		cmds = append(cmds, companionCmd(m.root, m.ownPane))
+	}
+	return tea.Batch(cmds...)
+}
 
 func (m Model) scanCmds() tea.Cmd {
 	return tea.Batch(scanCmd(m.gen, m.root), herdrCmd(m.gen, m.root))
 }
 
-// rescan invalidates every cached result and starts a new scan generation.
+// rescan starts a new scan generation.
 func (m *Model) rescan() tea.Cmd {
 	m.gen++
 	m.loading = true
-	m.previews = map[string]preview{}
-	m.pending = map[string]struct{}{}
-	m.diffs = map[string]string{}
 	return m.scanCmds()
 }
 
@@ -109,37 +90,6 @@ func (m Model) current() *repo.Repo {
 }
 
 func (m Model) currentDir() string { return filepath.Join(m.root, m.current().Name) }
-
-// currentPreview is the cached preview of the selected repo, if loaded.
-func (m Model) currentPreview() (preview, bool) {
-	r := m.current()
-	if r == nil {
-		return preview{}, false
-	}
-	p, ok := m.previews[r.Name]
-	return p, ok
-}
-
-// currentFile is the change selected in the file tree, if any.
-func (m Model) currentFile() *repo.Change {
-	p, ok := m.currentPreview()
-	if !ok || m.fileCursor >= len(p.files) {
-		return nil
-	}
-	return p.rows[p.files[m.fileCursor]].change
-}
-
-func diffKey(name, path string) string { return name + "\x00" + path }
-
-// setRepos replaces the repository list and keeps the selection by name.
-func (m *Model) setRepos(repos []repo.Repo) {
-	keep := ""
-	if r := m.current(); r != nil {
-		keep = r.Name
-	}
-	m.repos = repos
-	m.applyFilter(keep)
-}
 
 // inWorkspace reports whether a repo belongs to the current Herdr workspace:
 // Herdr has a pane in it, or the user pinned it.
@@ -153,6 +103,16 @@ func (m Model) inWorkspace(name string) bool {
 // pinned reports whether the user pinned a repo to the current workspace.
 func (m Model) pinned(name string) bool {
 	return m.pins != nil && m.pins.Pinned(m.herdr.WorkspaceLabel(), name)
+}
+
+// setRepos replaces the repository list and keeps the selection by name.
+func (m *Model) setRepos(repos []repo.Repo) {
+	keep := ""
+	if r := m.current(); r != nil {
+		keep = r.Name
+	}
+	m.repos = repos
+	m.applyFilter(keep)
 }
 
 // applyFilter recomputes the visible rows and selects the repo named keep.
@@ -175,17 +135,10 @@ func (m *Model) applyFilter(keep string) {
 		})
 	}
 	m.cursor = 0
-	found := false
 	for i, idx := range m.visible {
 		if m.repos[idx].Name == keep {
-			m.cursor, found = i, true
+			m.cursor = i
 		}
-	}
-	if !found {
-		m.fileCursor = 0
-	}
-	if m.currentFile() == nil {
-		m.focus = paneRepos
 	}
 }
 
@@ -197,66 +150,41 @@ func (m *Model) refilter() {
 	m.applyFilter(keep)
 }
 
-// selectRepo moves the repo cursor; the file selection resets when the repo changes.
-func (m *Model) selectRepo(i int) {
-	if i != m.cursor {
-		m.fileCursor = 0
-	}
-	m.cursor = i
-	if m.currentFile() == nil {
-		m.focus = paneRepos
-	}
-}
-
-// refreshCurrent reloads the preview and diff of the selected repo in place;
-// the old content stays on screen until the new one arrives.
-func (m Model) refreshCurrent() tea.Cmd {
-	r := m.current()
-	if r == nil {
+// selected schedules the companion update for the current selection.
+func (m *Model) selected() tea.Cmd {
+	if m.companion == nil {
 		return nil
 	}
-	var cmds []tea.Cmd
-	if _, pending := m.pending[r.Name]; !pending {
-		m.pending[r.Name] = struct{}{}
-		cmds = append(cmds, previewCmd(m.gen, m.root, r.Name))
+	m.selSeq++
+	return selectionTick(m.selSeq)
+}
+
+// showCurrent tells the companion pane to open the selected repo.
+func (m *Model) showCurrent() {
+	r := m.current()
+	if m.companion == nil || r == nil || r.Name == m.shown {
+		return
 	}
-	if c := m.currentFile(); c != nil {
-		if m.diffs[diffKey(r.Name, c.Path)] != "" { // loaded, not pending
-			cmds = append(cmds, diffCmd(m.gen, m.root, r.Name, *c))
-		}
+	if err := follow.Send(m.companion, m.currentDir()); err != nil {
+		m.status = "companion: " + err.Error()
+		m.companion = nil
+		return
 	}
-	return tea.Batch(cmds...)
+	m.shown = r.Name
 }
 
 // idle reports whether nothing is running that a background refresh could disturb.
 func (m Model) idle() bool {
-	return m.busy == "" && !m.fetching && !m.committing && !m.generating && !m.loading
+	return m.busy == "" && !m.fetching && !m.loading
 }
 
-// load requests whatever the right pane needs for the current selection.
-func (m *Model) load() tea.Cmd {
-	r := m.current()
-	if r == nil {
-		return nil
+// visibleRepos returns the repos currently listed, for the "all" actions.
+func (m Model) visibleRepos() []repo.Repo {
+	out := make([]repo.Repo, 0, len(m.visible))
+	for _, i := range m.visible {
+		out = append(out, m.repos[i])
 	}
-	p, ok := m.previews[r.Name]
-	if !ok {
-		if _, pending := m.pending[r.Name]; pending {
-			return nil
-		}
-		m.pending[r.Name] = struct{}{}
-		return previewCmd(m.gen, m.root, r.Name)
-	}
-	if m.fileCursor >= len(p.files) {
-		m.fileCursor = max(len(p.files)-1, 0)
-	}
-	if c := m.currentFile(); c != nil {
-		if _, ok := m.diffs[diffKey(r.Name, c.Path)]; !ok {
-			m.diffs[diffKey(r.Name, c.Path)] = "" // requested
-			return diffCmd(m.gen, m.root, r.Name, *c)
-		}
-	}
-	return nil
+	return out
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -273,46 +201,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "scan failed: " + msg.err.Error()
 		}
 		m.setRepos(msg.repos)
-		return m, m.load()
+		return m, m.selected()
 
 	case herdrMsg:
 		if msg.gen != m.gen {
 			return m, nil
 		}
 		m.herdr = msg.state
-		switch {
-		case m.workspaceOnly && !m.herdr.Available:
+		if m.workspaceOnly && !m.herdr.Available {
 			m.workspaceOnly = false
 			m.status = "herdr not reachable, showing all repos"
-		case m.workspaceOnly && !m.herdr.HasRepos(m.herdr.Workspace):
-			m.workspaceOnly = false
-			m.status = "no repos open in workspace " + m.herdr.WorkspaceLabel() + ", showing all"
 		}
 		m.refilter()
-		return m, m.load()
+		return m, m.selected()
 
-	case previewMsg:
-		if msg.gen != m.gen {
+	case companionMsg:
+		if msg.err != nil {
+			m.status = "no companion pane: " + msg.err.Error()
 			return m, nil
 		}
-		delete(m.pending, msg.name)
-		m.previews[msg.name] = msg.preview
-		return m, m.load()
+		m.companionPane, m.companion = msg.pane, msg.conn
+		return m, m.selected()
 
-	case diffMsg:
-		if msg.gen != m.gen {
-			return m, nil
+	case selectionMsg:
+		if int(msg) == m.selSeq {
+			m.showCurrent()
 		}
-		if msg.text == "" {
-			msg.text = "(no diff)"
-		}
-		m.diffs[diffKey(msg.name, msg.path)] = msg.text
 
 	case refreshMsg:
 		if !m.idle() {
 			return m, refreshTick()
 		}
-		return m, tea.Batch(scanCmd(m.gen, m.root), herdrCmd(m.gen, m.root), m.refreshCurrent(), refreshTick())
+		return m, tea.Batch(scanCmd(m.gen, m.root), herdrCmd(m.gen, m.root), refreshTick())
 
 	case autoFetchMsg:
 		if !m.idle() {
@@ -324,88 +244,58 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case fetchDoneMsg:
 		m.fetching = false
 		if len(msg.failed) > 0 {
-			m.status = fmt.Sprintf("fetch failed for %s", strings.Join(msg.failed, ", "))
+			m.status = "fetch failed for " + strings.Join(msg.failed, ", ")
 		}
 		return m, scanCmd(m.gen, m.root)
-
-	case lazygitDoneMsg:
-		cmd := m.rescan()
-		if msg.err != nil {
-			m.status = "lazygit: " + msg.err.Error()
-		}
-		return m, cmd
-
-	case tabCreatedMsg:
-		m.status = "opened " + msg.name
-		return m, herdrCmd(m.gen, m.root) // the new pane changes the workspace view
 
 	case syncDoneMsg:
 		m.busy = ""
 		m.status = syncSummary(msg)
 		return m, m.rescan()
 
-	case opDoneMsg:
-		m.busy = ""
-		cmd := m.rescan()
+	case lazygitDoneMsg:
 		if msg.err != nil {
-			m.status = fmt.Sprintf("%s %s failed: %v", msg.op, msg.name, msg.err)
-		} else {
-			m.status = fmt.Sprintf("%s %s done", msg.op, msg.name)
+			m.status = "lazygit: " + msg.err.Error()
 		}
-		return m, cmd
+		return m, m.rescan()
 
-	case generatedMsg:
-		m.generating = false
-		switch {
-		case msg.err != nil:
-			m.status = "claude: " + msg.err.Error()
-		case m.committing && m.current() != nil && m.current().Name == msg.name:
-			m.commitMsg, m.commitBody = msg.subject, reflow(msg.body)
-		}
+	case tabCreatedMsg:
+		m.status = "opened " + msg.name
+		return m, herdrCmd(m.gen, m.root)
 
 	case statusMsg:
 		m.status = string(msg)
 
 	case tea.MouseMsg:
-		return m.updateMouse(msg)
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if i, ok := m.repoRowAt(msg.Y); ok {
+				m.cursor = i
+				return m, m.selected()
+			}
+		}
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
+			return m, m.quit()
 		}
 		if m.filtering {
 			return m.updateFilter(msg)
-		}
-		if m.committing {
-			return m.updateCommit(msg)
-		}
-		if m.focus == paneFiles {
-			if next, cmd, handled := m.updateFileKeys(msg); handled {
-				return next, cmd
-			}
 		}
 		return m.updateKeys(msg)
 	}
 	return m, nil
 }
 
-func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft || m.committing {
-		return m, nil
+// quit closes the companion pane before leaving.
+func (m Model) quit() tea.Cmd {
+	if m.companion != nil {
+		m.companion.Close()
 	}
-	l := m.layout()
-	if msg.X < l.leftW {
-		if i, ok := m.repoRowAt(msg.Y); ok {
-			m.selectRepo(i)
-			m.focus = paneRepos
-		}
-		return m, m.load()
+	if m.companionPane != "" {
+		pane := m.companionPane
+		return tea.Sequence(func() tea.Msg { _ = herdr.ClosePane(pane); return nil }, tea.Quit)
 	}
-	if i, ok := m.fileRowAt(msg.Y); ok {
-		m.fileCursor = i
-		m.focus = paneFiles
-	}
-	return m, m.load()
+	return tea.Quit
 }
 
 func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -425,79 +315,7 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.refilter()
-	return m, m.load()
-}
-
-// updateCommit edits the commit dialog: tab switches between subject and
-// description, enter commits from the subject, alt+enter from anywhere.
-func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	field := &m.commitMsg
-	if m.commitField == 1 {
-		field = &m.commitBody
-	}
-	switch msg.String() {
-	case "esc":
-		m.committing, m.commitMsg, m.commitBody, m.commitField = false, "", "", 0
-	case "tab", "shift+tab", "down", "up":
-		m.commitField = 1 - m.commitField
-	case "ctrl+g":
-		if !m.generating {
-			m.generating = true
-			return m, generateCmd(m.root, m.current().Name)
-		}
-	case "enter":
-		if m.commitField == 1 {
-			m.commitBody += "\n"
-			return m, nil
-		}
-		return m.submitCommit()
-	case "alt+enter", "ctrl+s":
-		return m.submitCommit()
-	case "backspace":
-		if *field != "" {
-			_, size := utf8.DecodeLastRuneInString(*field)
-			*field = (*field)[:len(*field)-size]
-		}
-	default:
-		if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
-			*field += string(msg.Runes)
-		}
-	}
-	return m, nil
-}
-
-func (m Model) submitCommit() (tea.Model, tea.Cmd) {
-	if strings.TrimSpace(m.commitMsg) == "" {
-		m.commitField = 0
-		return m, nil
-	}
-	r := m.current()
-	m.committing = false
-	m.busy = "commit " + r.Name
-	subject, body := strings.TrimSpace(m.commitMsg), strings.TrimSpace(m.commitBody)
-	m.commitMsg, m.commitBody, m.commitField = "", "", 0
-	return m, commitCmd(m.root, r.Name, subject, body)
-}
-
-// updateFileKeys handles navigation inside the file tree; other keys fall
-// through to the global bindings.
-func (m Model) updateFileKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
-	p, _ := m.currentPreview()
-	switch msg.String() {
-	case "down", "j":
-		m.fileCursor = min(m.fileCursor+1, max(len(p.files)-1, 0))
-	case "up", "k":
-		m.fileCursor = max(m.fileCursor-1, 0)
-	case "g", "home":
-		m.fileCursor = 0
-	case "G", "end":
-		m.fileCursor = max(len(p.files)-1, 0)
-	case "esc", "h", "left", "tab":
-		m.focus = paneRepos
-	default:
-		return m, nil, false
-	}
-	return m, m.load(), true
+	return m, m.selected()
 }
 
 func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -507,35 +325,33 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.filter != "" {
 			m.filter = ""
 			m.refilter()
-			break
+			return m, m.selected()
 		}
-		return m, tea.Quit
+		return m, m.quit()
 
 	case "down", "j":
-		m.selectRepo(min(m.cursor+1, max(0, len(m.visible)-1)))
+		m.cursor = min(m.cursor+1, max(0, len(m.visible)-1))
 	case "up", "k":
-		m.selectRepo(max(m.cursor-1, 0))
+		m.cursor = max(m.cursor-1, 0)
 	case "g", "home":
-		m.selectRepo(0)
+		m.cursor = 0
 	case "G", "end":
-		m.selectRepo(max(0, len(m.visible)-1))
-	case "l", "right", "tab":
-		if m.currentFile() != nil {
-			m.focus = paneFiles
-		}
+		m.cursor = max(0, len(m.visible)-1)
 
 	case "/":
 		m.filtering = true
+
 	case "p":
 		if r := m.current(); r != nil && m.busy == "" {
 			m.busy = "sync " + r.Name
 			return m, syncCmd(m.root, []repo.Repo{*r})
 		}
 	case "P":
-		if m.busy == "" && len(m.repos) > 0 {
-			m.busy = "sync all"
-			return m, syncCmd(m.root, m.repos)
+		if m.busy == "" && len(m.visible) > 0 {
+			m.busy = fmt.Sprintf("sync %d repos", len(m.visible))
+			return m, syncCmd(m.root, m.visibleRepos())
 		}
+
 	case "w":
 		if m.herdr.Workspace != "" && m.herdr.Available {
 			m.workspaceOnly = !m.workspaceOnly
@@ -548,20 +364,22 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.refilter()
 		}
-	case "c":
-		if r := m.current(); r != nil && r.Dirty() && m.busy == "" {
-			m.committing, m.commitMsg, m.commitBody, m.commitField = true, "", "", 0
-		}
 
-	case "enter":
-		if m.current() != nil {
-			return m, lazygitCmd(m.currentDir())
+	case "enter", "l", "right":
+		if m.current() == nil {
+			break
 		}
+		if m.companionPane != "" {
+			m.showCurrent()
+			pane := m.ownPane
+			return m, func() tea.Msg { _ = herdr.FocusRight(pane); return nil }
+		}
+		return m, lazygitCmd(m.currentDir())
 
 	case "t":
 		return m, m.jumpToHerdr()
 	}
-	return m, m.load()
+	return m, m.selected()
 }
 
 // syncSummary condenses sync results into one status line.
@@ -584,16 +402,6 @@ func syncSummary(results []repo.SyncResult) string {
 		s += ", failed: " + strings.Join(failed, ", ")
 	}
 	return s
-}
-
-// gitOp starts a git operation in the selected repo unless one is running.
-func (m *Model) gitOp(op string, args ...string) tea.Cmd {
-	r := m.current()
-	if r == nil || m.busy != "" || r.Err != nil {
-		return nil
-	}
-	m.busy = op + " " + r.Name
-	return gitOpCmd(op, m.root, r.Name, args...)
 }
 
 // jumpToHerdr focuses the Herdr tab holding the selected repo, or opens one.

@@ -1,11 +1,14 @@
 package ui
 
 import (
+	"net"
+	"os"
 	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/chriopter/lazyherd/internal/follow"
 	"github.com/chriopter/lazyherd/internal/herdr"
 	"github.com/chriopter/lazyherd/internal/repo"
 )
@@ -21,33 +24,26 @@ type (
 		gen   int
 		state herdr.State
 	}
-	previewMsg struct {
-		gen     int
-		name    string
-		preview preview
-	}
-	diffMsg struct {
-		gen        int
-		name, path string
-		text       string
-	}
 	fetchDoneMsg   struct{ failed []string }
+	syncDoneMsg    []repo.SyncResult
 	lazygitDoneMsg struct{ err error }
 	tabCreatedMsg  struct{ name string }
-	opDoneMsg      struct {
-		op, name string
-		err      error
+	companionMsg   struct {
+		pane string
+		conn net.Conn
+		err  error
 	}
-	syncDoneMsg  []repo.SyncResult
+	selectionMsg int // debounced selection, carries the sequence number
 	statusMsg    string
-	refreshMsg   time.Time // periodic status refresh
-	autoFetchMsg time.Time // periodic background fetch
+	refreshMsg   time.Time
+	autoFetchMsg time.Time
 )
 
 const (
-	previewCommits = 14
 	refreshEvery   = 3 * time.Second
 	fetchEvery     = 60 * time.Second
+	selectionDelay = 250 * time.Millisecond
+	companionRatio = 0.7 // share of the width lazygit gets
 )
 
 func refreshTick() tea.Cmd {
@@ -56,6 +52,10 @@ func refreshTick() tea.Cmd {
 
 func fetchTick() tea.Cmd {
 	return tea.Tick(fetchEvery, func(t time.Time) tea.Msg { return autoFetchMsg(t) })
+}
+
+func selectionTick(seq int) tea.Cmd {
+	return tea.Tick(selectionDelay, func(time.Time) tea.Msg { return selectionMsg(seq) })
 }
 
 func scanCmd(gen int, root string) tea.Cmd {
@@ -69,28 +69,6 @@ func herdrCmd(gen int, root string) tea.Cmd {
 	return func() tea.Msg { return herdrMsg{gen: gen, state: herdr.Load(root)} }
 }
 
-func previewCmd(gen int, root, name string) tea.Cmd {
-	return func() tea.Msg {
-		dir := filepath.Join(root, name)
-		p := preview{}
-		var err error
-		p.branch, p.changes, err = repo.Status(dir)
-		if err != nil {
-			p.err = err
-		}
-		p.log = repo.Log(dir, previewCommits)
-		p.rows = buildTree(p.changes)
-		p.files = fileRows(p.rows)
-		return previewMsg{gen: gen, name: name, preview: p}
-	}
-}
-
-func diffCmd(gen int, root, name string, c repo.Change) tea.Cmd {
-	return func() tea.Msg {
-		return diffMsg{gen: gen, name: name, path: c.Path, text: repo.Diff(filepath.Join(root, name), c)}
-	}
-}
-
 func fetchCmd(root string, repos []repo.Repo) tea.Cmd {
 	return func() tea.Msg { return fetchDoneMsg{failed: repo.FetchAll(root, repos)} }
 }
@@ -99,21 +77,41 @@ func syncCmd(root string, repos []repo.Repo) tea.Cmd {
 	return func() tea.Msg { return syncDoneMsg(repo.SyncAll(root, repos)) }
 }
 
-// gitOpCmd runs a named git operation in one repo.
-func gitOpCmd(op, root, name string, args ...string) tea.Cmd {
-	return func() tea.Msg {
-		return opDoneMsg{op: op, name: name, err: repo.Run(filepath.Join(root, name), args...)}
-	}
-}
-
-func commitCmd(root, name, subject, body string) tea.Cmd {
-	return func() tea.Msg {
-		return opDoneMsg{op: "commit", name: name, err: repo.Commit(filepath.Join(root, name), subject, body)}
-	}
-}
-
 func lazygitCmd(dir string) tea.Cmd {
 	return tea.ExecProcess(repo.Lazygit(dir), func(err error) tea.Msg { return lazygitDoneMsg{err: err} })
+}
+
+// companionCmd splits a pane to the right of ours in Herdr and starts the
+// follower there, then connects to it.
+func companionCmd(root, ownPane string) tea.Cmd {
+	return func() tea.Msg {
+		exe, err := os.Executable()
+		if err != nil {
+			return companionMsg{err: err}
+		}
+		pane, err := herdr.SplitRight(ownPane, root, companionRatio)
+		if err != nil {
+			return companionMsg{err: err}
+		}
+		socket := filepath.Join(socketDir(), "lazyherd-"+ownPane+".sock")
+		if err := herdr.Run(pane, exe+" follow "+socket); err != nil {
+			_ = herdr.ClosePane(pane)
+			return companionMsg{err: err}
+		}
+		conn, err := follow.Dial(socket, 10*time.Second)
+		if err != nil {
+			_ = herdr.ClosePane(pane)
+			return companionMsg{err: err}
+		}
+		return companionMsg{pane: pane, conn: conn}
+	}
+}
+
+func socketDir() string {
+	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
+		return d
+	}
+	return os.TempDir()
 }
 
 func focusTabCmd(tabID, name string) tea.Cmd {

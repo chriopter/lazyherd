@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -20,10 +19,15 @@ func run(t *testing.T, dir string, args ...string) {
 	}
 }
 
-func TestScan(t *testing.T) {
+func needGit(t *testing.T) {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
+}
+
+func TestScan(t *testing.T) {
+	needGit(t)
 	root := t.TempDir()
 
 	clean := filepath.Join(root, "clean")
@@ -34,8 +38,9 @@ func TestScan(t *testing.T) {
 
 	dirty := filepath.Join(root, "dirty")
 	run(t, root, "init", "-q", "-b", "work", dirty)
+	os.MkdirAll(filepath.Join(dirty, "sub"), 0o755)
 	os.WriteFile(filepath.Join(dirty, "x"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(dirty, "y"), []byte("y"), 0o644)
+	os.WriteFile(filepath.Join(dirty, "sub", "y"), []byte("y"), 0o644)
 
 	os.Mkdir(filepath.Join(root, "not-a-repo"), 0o755)
 
@@ -46,44 +51,12 @@ func TestScan(t *testing.T) {
 	if len(repos) != 2 {
 		t.Fatalf("want 2 repos, got %d: %+v", len(repos), repos)
 	}
-	if repos[0].Name != "dirty" || repos[0].Changes != 2 || repos[0].Branch != "work" || !repos[0].NoUpstream {
-		t.Errorf("dirty repo scanned wrong: %+v", repos[0])
+	d := repos[0]
+	if d.Name != "dirty" || len(d.Changes) != 2 || d.Branch != "work" || !d.NoUpstream || d.Changes[0].Path != "sub/y" {
+		t.Errorf("dirty repo scanned wrong: %+v", d)
 	}
-	if repos[1].Name != "clean" || repos[1].Changes != 0 || repos[1].Branch != "main" {
-		t.Errorf("clean repo scanned wrong: %+v", repos[1])
-	}
-}
-
-func TestStatusParsesChanges(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not installed")
-	}
-	dir := t.TempDir()
-	run(t, dir, "init", "-q", "-b", "main", ".")
-	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644)
-	run(t, dir, "add", "a.txt")
-	run(t, dir, "commit", "-q", "-m", "init")
-	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aa"), 0o644)
-	os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
-	os.WriteFile(filepath.Join(dir, "sub", "new.go"), []byte("x"), 0o644)
-	run(t, dir, "add", "sub/new.go")
-
-	branch, changes, err := Status(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if branch != "main" {
-		t.Errorf("branch line: %q", branch)
-	}
-	if len(changes) != 2 || changes[0].Path != "a.txt" || changes[0].Code() != " M" ||
-		changes[1].Path != "sub/new.go" || changes[1].Code() != "A " {
-		t.Errorf("changes: %+v", changes)
-	}
-	if d := Diff(dir, changes[0]); !strings.Contains(d, "aa") {
-		t.Errorf("unstaged diff: %q", d)
-	}
-	if d := Diff(dir, changes[1]); !strings.HasPrefix(stripANSI(d), "@@") {
-		t.Errorf("staged diff: %q", d)
+	if c := repos[1]; c.Name != "clean" || c.Dirty() || c.Branch != "main" || c.Head == "" {
+		t.Errorf("clean repo scanned wrong: %+v", c)
 	}
 }
 
@@ -93,24 +66,8 @@ func TestScanMissingRoot(t *testing.T) {
 	}
 }
 
-func stripANSI(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == 0x1b {
-			for i < len(s) && s[i] != 'm' {
-				i++
-			}
-			continue
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
-}
-
 func TestSyncPullsAndPushes(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not installed")
-	}
+	needGit(t)
 	root := t.TempDir()
 	remote := filepath.Join(root, "remote.git")
 	run(t, root, "init", "-q", "--bare", remote)
@@ -145,7 +102,7 @@ func TestSyncPullsAndPushes(t *testing.T) {
 			t.Fatalf("still ahead after sync: %+v", r)
 		}
 	}
-	if res := Sync(root, Repo{Name: "work", NoUpstream: true}); res.Pulled || res.Pushed || res.Err != nil {
+	if res := Sync(root, Repo{Name: "work", Status: Status{NoUpstream: true}}); res.Pulled || res.Pushed || res.Err != nil {
 		t.Fatalf("no-upstream repo must be skipped: %+v", res)
 	}
 }

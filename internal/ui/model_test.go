@@ -13,10 +13,11 @@ import (
 	"github.com/chriopter/lazyherd/internal/repo"
 )
 
-// newTestModel builds a model outside of any Herdr workspace.
+// newTestModel builds a model outside of any Herdr pane or workspace.
 func newTestModel(t *testing.T) Model {
 	t.Helper()
 	t.Setenv("HERDR_WORKSPACE_ID", "")
+	t.Setenv("HERDR_PANE_ID", "")
 	return NewWithPins(t.TempDir(), filepath.Join(t.TempDir(), "pins.json"))
 }
 
@@ -35,6 +36,29 @@ func run(t *testing.T, m Model, cmd tea.Cmd) Model {
 	}
 	next, _ := m.Update(msg)
 	return next.(Model)
+}
+
+func key(s string) tea.KeyMsg {
+	switch s {
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	case "space":
+		return tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")}
+	}
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+}
+
+func press(t *testing.T, m Model, keys ...string) (Model, tea.Cmd) {
+	t.Helper()
+	var cmd tea.Cmd
+	for _, k := range keys {
+		var next tea.Model
+		next, cmd = m.Update(key(k))
+		m = next.(Model)
+	}
+	return m, cmd
 }
 
 func TestInitialScanIsAccepted(t *testing.T) {
@@ -59,37 +83,42 @@ func TestSetReposKeepsSelectionByName(t *testing.T) {
 	m := newTestModel(t)
 	m.setRepos([]repo.Repo{{Name: "a"}, {Name: "b"}, {Name: "c"}})
 	m.cursor = 2 // "c"
-
 	m.setRepos([]repo.Repo{{Name: "c"}, {Name: "a"}})
 	if got := m.current().Name; got != "c" {
 		t.Fatalf("selection lost after reorder: got %q", got)
 	}
-
 	m.setRepos([]repo.Repo{{Name: "a"}})
 	if got := m.current().Name; got != "a" {
 		t.Fatalf("selection after removal: got %q", got)
 	}
-
 	m.setRepos(nil)
 	if m.current() != nil {
 		t.Fatal("expected no selection for empty list")
 	}
 }
 
-func TestFilterIsCaseInsensitive(t *testing.T) {
+func TestFilterIsCaseInsensitiveAndUTF8Safe(t *testing.T) {
 	m := newTestModel(t)
 	m.setRepos([]repo.Repo{{Name: "Alpha"}, {Name: "beta"}, {Name: "alphabet"}})
-	m.filter = "ALPHA"
-	m.refilter()
+	m, _ = press(t, m, "/", "A", "L")
 	if len(m.visible) != 2 {
 		t.Fatalf("want 2 visible, got %d", len(m.visible))
 	}
+	m.filter = "abé"
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if got := next.(Model).filter; got != "ab" {
+		t.Fatalf("backspace should delete a whole rune, got %q", got)
+	}
+	m, _ = press(t, m, "esc")
+	if m.filter != "" || len(m.visible) != 3 {
+		t.Fatal("esc should clear the filter")
+	}
 }
 
-func TestViewSurvivesTinyTerminal(t *testing.T) {
+func TestViewSurvivesAnySize(t *testing.T) {
 	m := newTestModel(t)
-	m.setRepos([]repo.Repo{{Name: "a"}})
-	for _, size := range [][2]int{{1, 1}, {10, 3}, {60, 8}, {200, 50}} {
+	m.setRepos([]repo.Repo{{Name: "a-very-long-repository-name"}})
+	for _, size := range [][2]int{{1, 1}, {10, 3}, {24, 6}, {40, 8}, {60, 20}, {200, 50}} {
 		m.width, m.height = size[0], size[1]
 		if m.View() == "" {
 			t.Errorf("empty view at %v", size)
@@ -97,21 +126,13 @@ func TestViewSurvivesTinyTerminal(t *testing.T) {
 	}
 }
 
-func TestStalePreviewIsDropped(t *testing.T) {
+func TestMouseSelectsRow(t *testing.T) {
 	m := newTestModel(t)
-	m.setRepos([]repo.Repo{{Name: "a"}})
-	next, _ := m.Update(previewMsg{gen: m.gen - 1, name: "a", preview: preview{branch: "old"}})
-	if _, ok := next.(Model).previews["a"]; ok {
-		t.Fatal("stale preview cached")
-	}
-}
-
-func TestFilterBackspaceDeletesWholeRune(t *testing.T) {
-	m := newTestModel(t)
-	m.filtering, m.filter = true, "ab\u00e9"
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
-	if got := next.(Model).filter; got != "ab" {
-		t.Fatalf("want %q, got %q", "ab", got)
+	m.width, m.height = 60, 20
+	m.setRepos([]repo.Repo{{Name: "a"}, {Name: "b"}})
+	next, _ := m.Update(tea.MouseMsg{X: 2, Y: repoRowsTop + 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if got := next.(Model).current().Name; got != "b" {
+		t.Fatalf("click should select b, got %q", got)
 	}
 }
 
@@ -127,201 +148,26 @@ func TestCtrlCQuitsWhileFiltering(t *testing.T) {
 	}
 }
 
-func TestTabCreatedReloadsHerdr(t *testing.T) {
+func TestSyncKeys(t *testing.T) {
 	m := newTestModel(t)
-	if _, cmd := m.Update(tabCreatedMsg{name: "a"}); cmd == nil {
-		t.Fatal("expected a herdr reload command")
-	}
-}
-
-func TestSingleRepoOperationIsExclusive(t *testing.T) {
-	m := newTestModel(t)
-	m.setRepos([]repo.Repo{{Name: "a"}})
-	if m.gitOp("pull", "pull") == nil {
-		t.Fatal("first operation should start")
-	}
-	if m.gitOp("push", "push") != nil {
-		t.Fatal("second operation must wait for the first")
-	}
-	next, cmd := m.Update(opDoneMsg{op: "pull", name: "a"})
-	if next.(Model).busy != "" || cmd == nil {
-		t.Fatal("operation end should clear busy and rescan")
-	}
-}
-
-func TestCommitDialog(t *testing.T) {
-	m := newTestModel(t)
-	m.setRepos([]repo.Repo{{Name: "a", Changes: 2}, {Name: "clean"}})
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
-	m = next.(Model)
-	if !m.committing {
-		t.Fatal("c on a dirty repo should open the dialog")
-	}
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd != nil || !next.(Model).committing {
-		t.Fatal("empty message must not commit")
-	}
-	for _, r := range "Fixed it" {
-		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-		m = next.(Model)
-	}
-	if m.commitMsg != "Fixed it" {
-		t.Fatalf("typed message: %q", m.commitMsg)
-	}
-	if m.width, m.height = 100, 30; m.View() == "" {
-		t.Fatal("dialog view is empty")
-	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = next.(Model)
-	for _, r := range "why" {
-		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-		m = next.(Model)
-	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = next.(Model)
-	if m.commitBody != "why\n" || !m.committing {
-		t.Fatalf("enter in the description should add a line, got %q committing=%v", m.commitBody, m.committing)
-	}
-	if !strings.Contains(m.View(), "DESCRIPTION") {
-		t.Fatal("description field should always be shown")
-	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = next.(Model)
-	if m.committing {
-		t.Fatal("esc should close the dialog")
-	}
-
-	m.cursor = 1 // clean repo
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
-	if next.(Model).committing {
-		t.Fatal("c on a clean repo must not open the dialog")
-	}
-}
-
-func TestFilePaneNavigationAndMouse(t *testing.T) {
-	m := newTestModel(t)
-	m.width, m.height = 120, 30
-	m.setRepos([]repo.Repo{{Name: "a", Changes: 2}, {Name: "b"}})
-	p := preview{changes: []repo.Change{{Path: "x/one.go", Unstaged: 'M', Staged: ' '}, {Path: "two.go", Untracked: true}}}
-	p.rows = buildTree(p.changes)
-	p.files = fileRows(p.rows)
-	m.previews["a"] = p
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	m = next.(Model)
-	if m.focus != paneFiles || m.currentFile().Path != "two.go" {
-		t.Fatalf("l should focus the first file, got focus=%v file=%v", m.focus, m.currentFile())
-	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	m = next.(Model)
-	if m.currentFile().Path != "x/one.go" {
-		t.Fatalf("j should select the next file, got %v", m.currentFile())
-	}
-	if !strings.Contains(m.View(), "DIFF x/one.go") {
-		t.Fatal("view should show the diff section for the selected file")
-	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = next.(Model)
-	if m.focus != paneRepos {
-		t.Fatal("esc should return to the repo pane")
-	}
-
-	// click on the first tree row (two.go) inside the right pane
-	next, _ = m.Update(tea.MouseMsg{X: m.layout().leftW + 3, Y: treeRowsTop, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
-	m = next.(Model)
-	if m.focus != paneFiles || m.currentFile().Path != "two.go" {
-		t.Fatalf("click should select two.go, got focus=%v file=%v", m.focus, m.currentFile())
-	}
-	// click on the second repo row
-	next, _ = m.Update(tea.MouseMsg{X: 2, Y: repoRowsTop + 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
-	m = next.(Model)
-	if m.current().Name != "b" || m.focus != paneRepos {
-		t.Fatalf("click should select repo b, got %v", m.current())
-	}
-}
-
-func TestGeneratedMessageFillsDialog(t *testing.T) {
-	m := newTestModel(t)
-	m.setRepos([]repo.Repo{{Name: "a", Changes: 1}})
-	m.committing, m.generating = true, true
-	next, _ := m.Update(generatedMsg{name: "a", subject: "Added thing", body: "Because."})
-	m = next.(Model)
-	if m.generating || m.commitMsg != "Added thing" || m.commitBody != "Because." {
-		t.Fatalf("generated message not applied: %q / %q", m.commitMsg, m.commitBody)
-	}
-	if m.width, m.height = 100, 30; !strings.Contains(m.View(), "Because.") {
-		t.Fatal("dialog should show the description")
-	}
-	m.committing = false
-	next, _ = m.Update(generatedMsg{name: "a", subject: "late"})
-	if next.(Model).commitMsg == "late" {
-		t.Fatal("a late result must not change a closed dialog")
-	}
-}
-
-func TestSplitMessage(t *testing.T) {
-	sub, body := splitMessage("```\n\"Fixed the thing\"\n\nIt was broken because of X.\n- also Y\n```")
-	if sub != "Fixed the thing" || body != "It was broken because of X.\n- also Y" {
-		t.Fatalf("got %q / %q", sub, body)
-	}
-	if sub, body := splitMessage("Only subject"); sub != "Only subject" || body != "" {
-		t.Fatalf("got %q / %q", sub, body)
-	}
-}
-
-func TestReflow(t *testing.T) {
-	in := "Swap the README (fork notice,\ndev commands) for a minimal\nHello World.\n\n- first bullet\n  continued\n- second"
-	want := "Swap the README (fork notice, dev commands) for a minimal Hello World.\n\n- first bullet continued\n- second"
-	if got := reflow(in); got != want {
-		t.Fatalf("got %q", got)
-	}
-}
-
-func TestWorkspaceToggle(t *testing.T) {
-	t.Setenv("HERDR_WORKSPACE_ID", "w1")
-	m := NewWithPins(t.TempDir(), filepath.Join(t.TempDir(), "pins.json"))
 	m.setRepos([]repo.Repo{{Name: "a"}, {Name: "b"}})
-	next, _ := m.Update(herdrMsg{gen: m.gen, state: herdr.State{Available: true, Workspace: "w1"}})
+	m, cmd := press(t, m, "p")
+	if cmd == nil || m.busy != "sync a" {
+		t.Fatalf("p should sync the selected repo, busy=%q", m.busy)
+	}
+	if _, cmd := press(t, m, "P"); cmd != nil {
+		t.Fatal("a second sync must wait for the first")
+	}
+	next, cmd := m.Update(syncDoneMsg{{Name: "a", Pushed: true}})
 	m = next.(Model)
-	if m.workspaceOnly {
-		t.Fatal("a workspace without repo panes should start with all repos")
+	if m.busy != "" || cmd == nil || !strings.Contains(m.status, "1 pushed") {
+		t.Fatalf("sync end should clear busy, report and rescan: busy=%q status=%q", m.busy, m.status)
 	}
-	if len(m.visible) != 2 {
-		t.Fatalf("want 2 visible, got %d", len(m.visible))
-	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
-	m = next.(Model)
-	if !m.workspaceOnly || len(m.visible) != 0 {
-		t.Fatalf("w should switch to workspace mode: only=%v visible=%d", m.workspaceOnly, len(m.visible))
-	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
-	m = next.(Model)
-	if m.workspaceOnly || len(m.visible) != 2 {
-		t.Fatal("w should switch back to all repos")
-	}
-}
-
-func TestWorkspaceReposAreGroupedFirst(t *testing.T) {
-	t.Setenv("HERDR_WORKSPACE_ID", "w1")
-	root := t.TempDir()
-	m := NewWithPins(root, filepath.Join(t.TempDir(), "pins.json"))
-	m.setRepos([]repo.Repo{{Name: "a", Changes: 5}, {Name: "b"}, {Name: "c", Changes: 1}})
-	st := herdrStateWith(root, "w1", "c")
-	next, _ := m.Update(herdrMsg{gen: m.gen, state: st})
-	m = next.(Model)
-	if m.workspaceOnly {
-		t.Fatal("workspace mode should be off when the view is started with a grouped list")
-	}
-	if got := m.repos[m.visible[0]].Name; got != "c" {
-		t.Fatalf("workspace repo should come first, got %q", got)
-	}
-	if !m.inWorkspace("c") || m.inWorkspace("a") {
-		t.Fatal("inWorkspace wrong")
-	}
-	m.width, m.height = 120, 30
-	if !strings.Contains(m.View(), "⌂") {
-		t.Fatal("workspace repos should carry the ⌂ marker")
+	m.filter = "b"
+	m.refilter()
+	m, _ = press(t, m, "P")
+	if m.busy != "sync 1 repos" {
+		t.Fatalf("P should sync the listed repos only, busy=%q", m.busy)
 	}
 }
 
@@ -329,12 +175,12 @@ func TestRefreshKeepsSelectionAndSkipsWhenBusy(t *testing.T) {
 	m := newTestModel(t)
 	m.setRepos([]repo.Repo{{Name: "a"}, {Name: "b"}})
 	m.cursor = 1
-	next, _ := m.Update(scanMsg{gen: m.gen, repos: []repo.Repo{{Name: "b", Changes: 3}, {Name: "a"}}})
+	next, _ := m.Update(scanMsg{gen: m.gen, repos: []repo.Repo{{Name: "b", Status: repo.Status{Changes: []repo.Change{{Path: "x"}}}}, {Name: "a"}}})
 	m = next.(Model)
 	if m.current().Name != "b" {
 		t.Fatalf("selection lost on background rescan: %v", m.current())
 	}
-	m.busy = "pull b"
+	m.busy = "sync b"
 	if _, cmd := m.Update(refreshMsg(time.Now())); cmd == nil {
 		t.Fatal("refresh should at least re-arm its timer")
 	}
@@ -342,48 +188,93 @@ func TestRefreshKeepsSelectionAndSkipsWhenBusy(t *testing.T) {
 
 // herdrStateWith loads a Herdr state through a fake herdr binary that reports
 // one pane per named repo in the given workspace.
-func herdrStateWith(t_root, workspace string, repos ...string) herdr.State {
+func herdrStateWith(t *testing.T, root, workspace string, repos ...string) herdr.State {
+	t.Helper()
 	panes := ""
 	for i, r := range repos {
 		if i > 0 {
 			panes += ","
 		}
-		panes += `{"pane_id":"p` + r + `","tab_id":"t` + r + `","workspace_id":"` + workspace + `","cwd":"` + t_root + "/" + r + `"}`
+		panes += `{"pane_id":"p` + r + `","tab_id":"t` + r + `","workspace_id":"` + workspace + `","cwd":"` + root + "/" + r + `"}`
 	}
-	bin, _ := os.MkdirTemp("", "fakeherdr")
+	bin := t.TempDir()
 	script := "#!/bin/sh\ncase \"$1 $2\" in\n  \"pane list\") printf '%s' '{\"result\":{\"panes\":[" + panes + "]}}' ;;\n  \"workspace list\") printf '%s' '{\"result\":{\"workspaces\":[]}}' ;;\n  *) exit 1 ;;\nesac\n"
-	os.WriteFile(bin+"/herdr", []byte(script), 0o755)
-	os.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return herdr.Load(t_root)
+	if err := os.WriteFile(filepath.Join(bin, "herdr"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return herdr.Load(root)
 }
 
-func TestSpacePinsRepoToWorkspace(t *testing.T) {
+func TestWorkspaceGroupingToggleAndPins(t *testing.T) {
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	t.Setenv("HERDR_PANE_ID", "")
 	root := t.TempDir()
 	m := NewWithPins(root, filepath.Join(t.TempDir(), "pins.json"))
-	m.setRepos([]repo.Repo{{Name: "a"}, {Name: "b"}, {Name: "c"}})
-	next, _ := m.Update(herdrMsg{gen: m.gen, state: herdrStateWith(root, "w1", "c")})
+	m.setRepos([]repo.Repo{{Name: "a", Status: repo.Status{Changes: []repo.Change{{Path: "x"}}}}, {Name: "b"}, {Name: "c"}})
+	next, _ := m.Update(herdrMsg{gen: m.gen, state: herdrStateWith(t, root, "w1", "c")})
 	m = next.(Model)
-	m.selectRepo(2) // grouping puts c first, then a, b
+	if m.workspaceOnly || m.repos[m.visible[0]].Name != "c" {
+		t.Fatalf("default view should list all repos with the workspace repo first: %v", m.visible)
+	}
+	m.width, m.height = 80, 20
+	if !strings.Contains(m.View(), "⌂") {
+		t.Fatal("workspace repos should carry the ⌂ marker")
+	}
+
+	m, _ = press(t, m, "w")
+	if !m.workspaceOnly || len(m.visible) != 1 {
+		t.Fatalf("w should narrow to the workspace: only=%v visible=%d", m.workspaceOnly, len(m.visible))
+	}
+	m, _ = press(t, m, "w")
+	if m.workspaceOnly || len(m.visible) != 3 {
+		t.Fatal("w should switch back to all repos")
+	}
+
+	m.cursor = 2 // "b"
 	if m.current().Name != "b" {
 		t.Fatalf("expected b selected, got %s", m.current().Name)
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
-	m = next.(Model)
-	if !m.pinned("b") || !m.inWorkspace("b") {
-		t.Fatal("space should pin the repo")
+	m, _ = press(t, m, "space")
+	if !m.pinned("b") || !m.inWorkspace(m.repos[m.visible[0]].Name) || !m.inWorkspace(m.repos[m.visible[1]].Name) {
+		t.Fatal("space should pin the repo into the workspace group")
 	}
-	if !m.inWorkspace(m.repos[m.visible[0]].Name) || !m.inWorkspace(m.repos[m.visible[1]].Name) {
-		t.Fatalf("pinned repo should join the workspace group, order: %v", m.visible)
-	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
-	m = next.(Model)
+	m, _ = press(t, m, "w")
 	if len(m.visible) != 2 {
 		t.Fatalf("workspace view should show pane repo and pinned repo, got %d", len(m.visible))
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
-	m = next.(Model)
+	m, _ = press(t, m, "space")
 	if m.pinned("b") || len(m.visible) != 1 {
 		t.Fatal("space again should unpin and drop the repo from the workspace view")
+	}
+}
+
+func TestSelectionIsDebouncedToCompanion(t *testing.T) {
+	m := newTestModel(t)
+	m.setRepos([]repo.Repo{{Name: "a"}, {Name: "b"}})
+	if _, cmd := press(t, m, "j"); cmd != nil {
+		t.Fatal("without a companion no selection timer is needed")
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	m.companion = w
+	m, cmd := press(t, m, "j")
+	if cmd == nil {
+		t.Fatal("a companion needs the debounce timer")
+	}
+	next, _ := m.Update(selectionMsg(m.selSeq - 1)) // stale timer
+	if next.(Model).shown != "" {
+		t.Fatal("a stale selection tick must not send")
+	}
+	next, _ = m.Update(selectionMsg(m.selSeq))
+	m = next.(Model)
+	w.Close()
+	buf := make([]byte, 256)
+	n, _ := r.Read(buf)
+	if m.shown != "b" || !strings.HasSuffix(strings.TrimSpace(string(buf[:n])), "/b") {
+		t.Fatalf("companion should receive the selected repo path, got %q", buf[:n])
 	}
 }

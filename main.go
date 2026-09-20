@@ -1,5 +1,5 @@
-// lazyherd is a cockpit over every Git repository in one directory, with a
-// jump into lazygit per repo and an optional link to Herdr workspaces.
+// lazyherd is a cockpit over every Git repository in one directory: a repo
+// list that drives lazygit in a Herdr pane next to it.
 package main
 
 import (
@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/chriopter/lazyherd/internal/follow"
 	"github.com/chriopter/lazyherd/internal/ui"
 )
 
@@ -17,11 +18,21 @@ import (
 var version = "dev"
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "follow" {
+		// Companion mode, started by lazyherd itself in a Herdr pane.
+		if err := follow.Run(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "lazyherd follow:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), `Usage: lazyherd [flags] [DIR]
 
-Shows every Git repository directly under DIR (default: ~/git) with its
-changes, branch and sync state. Enter opens lazygit in the selected repo.
+Lists every Git repository directly under DIR (default: ~/git) with its
+changes, branch and sync state. Inside a Herdr pane it opens lazygit for
+the selected repo in a pane to the right; elsewhere Enter opens lazygit.
 
 Flags:
 `)

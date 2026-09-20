@@ -21,22 +21,20 @@ const (
 
 // Repo is the scanned state of one repository directly under the root.
 type Repo struct {
-	Name       string
-	Branch     string // current branch, or "@<hash>" when detached
-	Changes    int    // entries in git status --porcelain
-	Ahead      int
-	Behind     int
-	NoUpstream bool
-	Err        error // git status failed; the counts above are unknown
+	Name string
+	Status
+	Err error // git status failed; the fields above are unknown
 }
 
 // Dirty reports whether the working tree has uncommitted changes.
-func (r Repo) Dirty() bool { return r.Changes > 0 }
+func (r Repo) Dirty() bool { return len(r.Changes) > 0 }
 
 func git(timeout time.Duration, dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks", "-C", dir}, args...)...)
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
 	return strings.TrimRight(string(out), "\n"), err
 }
 
@@ -55,9 +53,10 @@ func parallel(repos []Repo, fn func(i int, r Repo)) {
 	wg.Wait()
 }
 
-// Scan reads every repository directly under root concurrently and returns
-// them sorted: most changes first, then most out of sync, then by name.
-// Only immediate children are considered; symlinked directories are skipped.
+// Scan reads every repository directly under root with one git call each and
+// returns them sorted: most changes first, then most out of sync, then by
+// name. Only immediate children are considered; symlinked directories are
+// skipped.
 func Scan(root string) ([]Repo, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -70,12 +69,13 @@ func Scan(root string) ([]Repo, error) {
 		}
 	}
 	parallel(repos, func(i int, r Repo) {
-		repos[i] = scanOne(r.Name, filepath.Join(root, r.Name))
+		st, err := status(filepath.Join(root, r.Name))
+		repos[i] = Repo{Name: r.Name, Status: st, Err: err}
 	})
 	sort.Slice(repos, func(i, j int) bool {
 		a, b := repos[i], repos[j]
-		if a.Changes != b.Changes {
-			return a.Changes > b.Changes
+		if len(a.Changes) != len(b.Changes) {
+			return len(a.Changes) > len(b.Changes)
 		}
 		if a.Ahead+a.Behind != b.Ahead+b.Behind {
 			return a.Ahead+a.Behind > b.Ahead+b.Behind
@@ -89,29 +89,6 @@ func Scan(root string) ([]Repo, error) {
 func isRepo(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, ".git"))
 	return err == nil
-}
-
-func scanOne(name, dir string) Repo {
-	r := Repo{Name: name}
-	st, err := git(gitTimeout, dir, "status", "--porcelain", "--untracked-files=all")
-	if err != nil {
-		r.Err = err
-		return r
-	}
-	if st != "" {
-		r.Changes = len(strings.Split(st, "\n"))
-	}
-	r.Branch, _ = git(gitTimeout, dir, "branch", "--show-current")
-	if r.Branch == "" {
-		h, _ := git(gitTimeout, dir, "rev-parse", "--short", "HEAD")
-		r.Branch = "@" + h
-	}
-	if ab, err := git(gitTimeout, dir, "rev-list", "--left-right", "--count", "@{u}...HEAD"); err == nil {
-		fmt.Sscanf(ab, "%d\t%d", &r.Behind, &r.Ahead)
-	} else {
-		r.NoUpstream = true
-	}
-	return r
 }
 
 // FetchAll runs git fetch --all in every repository and returns the names of
@@ -133,91 +110,6 @@ func FetchAll(root string, repos []Repo) []string {
 	return failed
 }
 
-// Change is one entry of git status: a file with its index and worktree state.
-type Change struct {
-	Path      string
-	Staged    byte // X column of git status --porcelain, ' ' when clean
-	Unstaged  byte // Y column
-	Untracked bool
-}
-
-// Code is the two-letter status as git shows it, e.g. "M ", " M", "??".
-func (c Change) Code() string {
-	if c.Untracked {
-		return "??"
-	}
-	return string([]byte{c.Staged, c.Unstaged})
-}
-
-// Status returns the branch summary line and the changed files of dir.
-func Status(dir string) (branch string, changes []Change, err error) {
-	out, err := git(gitTimeout, dir, "status", "--porcelain=v1", "-b", "--untracked-files=all")
-	if err != nil {
-		return "", nil, err
-	}
-	for _, line := range strings.Split(out, "\n") {
-		switch {
-		case strings.HasPrefix(line, "## "):
-			branch = strings.TrimPrefix(line, "## ")
-		case len(line) > 3:
-			c := Change{Staged: line[0], Unstaged: line[1], Path: line[3:]}
-			if c.Staged == '?' {
-				c.Untracked = true
-			}
-			if i := strings.Index(c.Path, " -> "); i >= 0 { // rename: keep the new name
-				c.Path = c.Path[i+4:]
-			}
-			changes = append(changes, c)
-		}
-	}
-	return branch, changes, nil
-}
-
-// Log returns the recent history of dir, colored.
-func Log(dir string, commits int) string {
-	out, err := git(gitTimeout, dir, "log", "--color=always", "--date=relative", fmt.Sprintf("-%d", commits),
-		"--pretty=format:%C(yellow)%h%C(reset) %C(dim)%ad%C(reset) %s")
-	if err != nil {
-		return "git log failed: " + err.Error()
-	}
-	return out
-}
-
-// Diff returns the colored diff of one file: staged and unstaged hunks, or
-// the whole file for an untracked one. The per-file header lines are dropped,
-// the hunks start right away.
-func Diff(dir string, c Change) string {
-	if c.Untracked {
-		// exit status 1 just means "differences found"
-		out, _ := git(gitTimeout, dir, "diff", "--no-index", "--color=always", "--", os.DevNull, c.Path)
-		return stripDiffHeader(out)
-	}
-	var parts []string
-	if c.Staged != ' ' {
-		if out, _ := git(gitTimeout, dir, "diff", "--cached", "--color=always", "--", c.Path); out != "" {
-			parts = append(parts, stripDiffHeader(out))
-		}
-	}
-	if c.Unstaged != ' ' {
-		if out, _ := git(gitTimeout, dir, "diff", "--color=always", "--", c.Path); out != "" {
-			parts = append(parts, stripDiffHeader(out))
-		}
-	}
-	return strings.Join(parts, "\n")
-}
-
-// stripDiffHeader drops everything before the first hunk of a single-file
-// diff, so the pane shows changes instead of "diff --git" boilerplate.
-func stripDiffHeader(diff string) string {
-	lines := strings.Split(diff, "\n")
-	for i, l := range lines {
-		if strings.Contains(l, "@@") {
-			return strings.Join(lines[i:], "\n")
-		}
-	}
-	return diff
-}
-
 // SyncResult is what Sync did in one repository.
 type SyncResult struct {
 	Name   string
@@ -235,18 +127,17 @@ func Sync(root string, r Repo) SyncResult {
 		return res
 	}
 	dir := filepath.Join(root, r.Name)
-	before, _ := git(gitTimeout, dir, "rev-parse", "HEAD")
 	if _, err := git(fetchTimeout, dir, "pull", "--ff-only", "--quiet"); err != nil {
 		res.Err = fmt.Errorf("pull: %w", err)
 		return res
 	}
-	after, _ := git(gitTimeout, dir, "rev-parse", "HEAD")
-	res.Pulled = before != after
-	var behind, ahead int
-	if ab, err := git(gitTimeout, dir, "rev-list", "--left-right", "--count", "@{u}...HEAD"); err == nil {
-		fmt.Sscanf(ab, "%d %d", &behind, &ahead)
+	st, err := status(dir)
+	if err != nil {
+		res.Err = err
+		return res
 	}
-	if ahead > 0 {
+	res.Pulled = st.Head != r.Head
+	if st.Ahead > 0 {
 		if _, err := git(fetchTimeout, dir, "push", "--quiet"); err != nil {
 			res.Err = fmt.Errorf("push: %w", err)
 			return res
@@ -261,48 +152,6 @@ func SyncAll(root string, repos []Repo) []SyncResult {
 	results := make([]SyncResult, len(repos))
 	parallel(repos, func(i int, r Repo) { results[i] = Sync(root, r) })
 	return results
-}
-
-// Run executes one git command in dir, for pull, push and single fetches.
-func Run(dir string, args ...string) error {
-	_, err := git(fetchTimeout, dir, args...)
-	return err
-}
-
-// Commit stages everything in dir and commits it with subject and, when not
-// empty, a body paragraph.
-func Commit(dir, subject, body string) error {
-	if _, err := git(gitTimeout, dir, "add", "-A"); err != nil {
-		return err
-	}
-	args := []string{"commit", "-q", "-m", subject}
-	if body != "" {
-		args = append(args, "-m", body)
-	}
-	_, err := git(fetchTimeout, dir, args...)
-	return err
-}
-
-// DiffAll describes every pending change of dir for a commit message: the
-// short status, the diff against HEAD and the content of untracked files,
-// cut off at limit bytes.
-func DiffAll(dir string, limit int) string {
-	var b strings.Builder
-	st, _ := git(gitTimeout, dir, "status", "--short", "--untracked-files=all")
-	b.WriteString(st + "\n\n")
-	d, _ := git(gitTimeout, dir, "diff", "HEAD", "--no-color")
-	b.WriteString(d + "\n")
-	for _, line := range strings.Split(st, "\n") {
-		if strings.HasPrefix(line, "?? ") && b.Len() < limit {
-			out, _ := git(gitTimeout, dir, "diff", "--no-index", "--no-color", "--", os.DevNull, line[3:])
-			b.WriteString(out + "\n")
-		}
-	}
-	s := b.String()
-	if len(s) > limit {
-		s = s[:limit] + "\n[truncated]\n"
-	}
-	return s
 }
 
 // Lazygit returns the command that opens lazygit in dir.

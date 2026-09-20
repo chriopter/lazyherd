@@ -3,9 +3,11 @@ package herdr
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -116,6 +118,34 @@ func (s State) WorkspaceLabel() string {
 		return l
 	}
 	return s.Workspace
+}
+
+// SplitRight opens a shell pane to the right of pane, taking ratio of the
+// width, without moving focus. It returns the new pane's id.
+func SplitRight(pane, cwd string, ratio float64) (string, error) {
+	res, err := call("pane", "split", "--pane", pane, "--direction", "right",
+		"--ratio", strconv.FormatFloat(ratio, 'f', 2, 64), "--cwd", cwd, "--no-focus")
+	if err != nil {
+		return "", err
+	}
+	p, err := decode[Pane](res["pane"])
+	if err != nil || p.ID == "" {
+		return "", errors.New("herdr: split returned no pane id")
+	}
+	return p.ID, nil
+}
+
+// Run submits a command line in a pane that sits at a shell prompt.
+func Run(pane, command string) error {
+	return exec.Command("herdr", "pane", "run", pane, command).Run()
+}
+
+// ClosePane closes a pane.
+func ClosePane(pane string) error { return exec.Command("herdr", "pane", "close", pane).Run() }
+
+// FocusRight moves focus to the pane right of pane.
+func FocusRight(pane string) error {
+	return exec.Command("herdr", "pane", "focus", "--direction", "right", "--pane", pane).Run()
 }
 
 // FocusTab brings a tab to the front.
