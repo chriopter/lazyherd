@@ -69,10 +69,13 @@ func (m Model) commitDialog() string {
 	r := m.current()
 	w := min(max(m.width*60/100, 50), m.width-4)
 	input := m.commitMsg + "▏"
+	if m.generating {
+		input = dimStyle.Render("⟳ asking claude …")
+	}
 	body := previewTitleStyle.Render("Commit "+r.Name) + "  " +
 		dimStyle.Render(fmt.Sprintf("%d changes, all will be staged", r.Changes)) + "\n\n" +
 		lipgloss.NewStyle().MaxWidth(w-4).Render(input) + "\n\n" +
-		dimStyle.Render("enter commit · esc cancel")
+		dimStyle.Render("enter commit · tab generate with claude · esc cancel")
 	return activePaneStyle.Width(w).Render(body)
 }
 
@@ -346,7 +349,7 @@ func (m Model) help() string {
 	k := func(key, desc string) string { return keyStyle.Render(key) + dimStyle.Render(" "+desc) }
 	sep := dimStyle.Render(" · ")
 	if m.committing {
-		return " " + k("↵", "commit") + sep + k("esc", "cancel")
+		return " " + strings.Join([]string{k("↵", "commit"), k("tab", "generate with claude"), k("esc", "cancel")}, sep)
 	}
 	if m.focus == paneFiles {
 		return " " + strings.Join([]string{k("j/k", "file"), k("esc", "back"), k("↵", "lazygit"), k("c", "commit"), k("q", "quit")}, sep)

@@ -222,3 +222,19 @@ func TestFilePaneNavigationAndMouse(t *testing.T) {
 		t.Fatalf("click should select repo b, got %v", m.current())
 	}
 }
+
+func TestGeneratedMessageFillsDialog(t *testing.T) {
+	m := newTestModel(t)
+	m.setRepos([]repo.Repo{{Name: "a", Changes: 1}})
+	m.committing, m.generating = true, true
+	next, _ := m.Update(generatedMsg{name: "a", text: "Added thing"})
+	m = next.(Model)
+	if m.generating || m.commitMsg != "Added thing" {
+		t.Fatalf("generated message not applied: %+v", m.commitMsg)
+	}
+	m.committing = false
+	next, _ = m.Update(generatedMsg{name: "a", text: "late"})
+	if next.(Model).commitMsg == "late" {
+		t.Fatal("a late result must not change a closed dialog")
+	}
+}

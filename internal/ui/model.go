@@ -55,6 +55,7 @@ type Model struct {
 	filter        string // current name filter
 	committing    bool   // commit dialog open
 	commitMsg     string // message typed into the commit dialog
+	generating    bool   // claude is writing a commit message
 	workspaceOnly bool   // only repos with a pane in the current Herdr workspace
 	status        string // transient note in the title bar
 }
@@ -269,6 +270,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 
+	case generatedMsg:
+		m.generating = false
+		switch {
+		case msg.err != nil:
+			m.status = "claude: " + msg.err.Error()
+		case m.committing && m.current() != nil && m.current().Name == msg.name:
+			m.commitMsg = msg.text
+		}
+
 	case statusMsg:
 		m.status = string(msg)
 
@@ -338,6 +348,11 @@ func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.committing, m.commitMsg = false, ""
+	case "tab":
+		if !m.generating {
+			m.generating = true
+			return m, generateCmd(m.root, m.current().Name)
+		}
 	case "enter":
 		if strings.TrimSpace(m.commitMsg) == "" {
 			return m, nil

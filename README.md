@@ -7,6 +7,20 @@ in the one you pick. Press Esc to get back from lazygit to the overview.
 
 ![lazyherd](docs/screenshot.png)
 
+## Features
+
+- Scans every Git repository directly under one directory, in parallel.
+- Repo list with number of changed files, branch, ahead/behind counts; dirty repos first.
+- Change tree of the selected repo with git status codes per file.
+- Diff of the selected file, or the recent log when the repo is clean.
+- Enter opens lazygit in the selected repo; on exit the list is rescanned.
+- Commit dialog: stages everything, asks for a message, Tab lets Claude Code write it.
+- Pull (`--ff-only`), push, fetch for one repo; fetch for all repos.
+- Name filter.
+- Keyboard and mouse selection.
+- Herdr: started inside a workspace, shows only that workspace's repos; jump to a repo's tab or open one.
+- Light and dark terminal themes.
+
 ## Install
 
 With [mise](https://mise.jdx.dev) (updates via `mise upgrade`):
@@ -23,7 +37,8 @@ go install github.com/chriopter/lazyherd@latest
 
 Or grab a Linux or macOS binary from the
 [releases](https://github.com/chriopter/lazyherd/releases). Building from
-source needs Go 1.24 or newer. `git` and `lazygit` must be on your `PATH`.
+source needs Go 1.24 or newer. Requires `git` and `lazygit` on your `PATH`;
+`claude` for generated commit messages.
 
 ## Use
 
@@ -32,47 +47,36 @@ lazyherd            # scans ~/git
 lazyherd ~/code     # or any directory of repos
 ```
 
-Short on typing? `alias lh=lazyherd` in your shell rc.
+`alias lh=lazyherd` in your shell rc for the short name.
 
 | Key | Action |
 |-----|--------|
 | `↵` | Open lazygit in the selected repo |
 | `l` | Move into the file tree; `j`/`k` pick a file, `esc` goes back |
-| `c` | Stage everything and commit, asking for a message |
+| `c` | Commit dialog: stage all and commit; `tab` generates the message with `claude -p` |
 | `p` | `git pull --ff-only` in the selected repo |
 | `P` | `git push` in the selected repo |
 | `f` | `git fetch --all` in the selected repo |
 | `F` | Fetch all repos |
 | `R` | Rescan |
 | `/` | Filter by name |
-| `t` | Jump to the repo's [Herdr](https://herdr.dev) tab, or open one |
+| `t` | Jump to the repo's Herdr tab, or open one |
 | `w` | Toggle between the current Herdr workspace and all repos |
 | `q` | Quit |
 
-The right pane lists the changed files of the selected repo as a tree and
-shows the diff of the picked file, or the recent log when the repo is clean.
-Mouse clicks select repos and files too.
+Notes:
 
-Only the immediate subdirectories of DIR are scanned; symlinked directories
-are skipped. Repos are sorted
-dirty first, then out of sync, then by name. Ahead/behind counts come from
-the local tracking refs, so they are only as fresh as the last fetch; `F`
-runs `git fetch --all` in every scanned repo, including the ones hidden by
-a filter.
+- Only the immediate subdirectories of the scanned directory are considered; symlinked directories are skipped.
+- Ahead/behind counts come from the local tracking refs and are as fresh as the last fetch. `F` fetches every scanned repo, including ones hidden by the filter.
+- Generated commit messages run `claude -p` inside the repo, so its `CLAUDE.md` conventions apply. The diff sent is capped at 60 kB.
+- Without Herdr, `t` and `w` are hidden and everything else works as usual.
 
-To make `Esc` leave lazygit and return to the cockpit, add to
+For `Esc` to leave lazygit and return to the cockpit, add to
 `~/.config/lazygit/config.yml`:
 
 ```yaml
 quitOnTopLevelReturn: true
 ```
-
-## Herdr
-
-Started inside a Herdr pane, lazyherd shows only the repos that have a pane
-in the current workspace. `w` switches to all repos, `t` focuses the tab that
-already works in the selected repo or creates one. Without Herdr both keys
-are hidden and everything else works as usual.
 
 ## Development
 

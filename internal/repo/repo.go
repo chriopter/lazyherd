@@ -233,5 +233,27 @@ func Commit(dir, message string) error {
 	return err
 }
 
+// DiffAll describes every pending change of dir for a commit message: the
+// short status, the diff against HEAD and the content of untracked files,
+// cut off at limit bytes.
+func DiffAll(dir string, limit int) string {
+	var b strings.Builder
+	st, _ := git(gitTimeout, dir, "status", "--short", "--untracked-files=all")
+	b.WriteString(st + "\n\n")
+	d, _ := git(gitTimeout, dir, "diff", "HEAD", "--no-color")
+	b.WriteString(d + "\n")
+	for _, line := range strings.Split(st, "\n") {
+		if strings.HasPrefix(line, "?? ") && b.Len() < limit {
+			out, _ := git(gitTimeout, dir, "diff", "--no-index", "--no-color", "--", os.DevNull, line[3:])
+			b.WriteString(out + "\n")
+		}
+	}
+	s := b.String()
+	if len(s) > limit {
+		s = s[:limit] + "\n[truncated]\n"
+	}
+	return s
+}
+
 // Lazygit returns the command that opens lazygit in dir.
 func Lazygit(dir string) *exec.Cmd { return exec.Command("lazygit", "-p", dir) }
