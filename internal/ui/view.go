@@ -13,6 +13,7 @@ import (
 
 const (
 	colChanges   = 4
+	colGroup     = 2 // "⌂ " for repos of the current Herdr workspace
 	colBranchMin = 8
 	colSync      = 9
 	gap          = 2
@@ -157,7 +158,7 @@ func (m Model) title() string {
 	case m.loading:
 		t += dimStyle.Render("  ⟳ scanning")
 	case m.fetching:
-		t += dimStyle.Render("  ⇣ fetching all")
+		t += dimStyle.Render("  ⇣ fetching")
 	case m.busy != "":
 		t += dimStyle.Render("  ⟳ " + m.busy)
 	}
@@ -182,7 +183,7 @@ func (m Model) title() string {
 // columns splits the free width between the name and branch columns: names
 // get what the longest visible name needs, branches take the rest.
 func (m Model) columns(width int) (nameW, branchW int) {
-	free := width - 1 - colChanges - 3*gap - colSync - 2
+	free := width - 1 - colChanges - m.groupWidth() - 3*gap - colSync - 2
 	longest := 4
 	for _, i := range m.visible {
 		longest = max(longest, len(m.repos[i].Name))
@@ -211,10 +212,19 @@ func (m Model) repoRowAt(y int) (int, bool) {
 	return i, true
 }
 
+// groupWidth is the width of the workspace marker column, shown only when a
+// Herdr workspace is known and the list mixes its repos with the others.
+func (m Model) groupWidth() int {
+	if m.herdr.Workspace != "" && m.herdr.Available && !m.workspaceOnly {
+		return colGroup
+	}
+	return 0
+}
+
 func (m Model) table(width, height int) string {
 	nameW, branchW := m.columns(width)
-	rows := []string{headerStyle.Render(fmt.Sprintf(" %*s  %-*s  %-*s  %s",
-		colChanges, "CHG", nameW, "REPO", branchW, "BRANCH", "SYNC"))}
+	rows := []string{headerStyle.Render(fmt.Sprintf(" %*s  %*s%-*s  %-*s  %s",
+		colChanges, "CHG", m.groupWidth(), "", nameW, "REPO", branchW, "BRANCH", "SYNC"))}
 	start, count := m.repoWindow()
 	for i := start; i < len(m.visible) && i-start < count; i++ {
 		rows = append(rows, m.row(m.repos[m.visible[i]], i == m.cursor, nameW, branchW, width))
@@ -267,7 +277,14 @@ func (m Model) row(r repo.Repo, selected bool, nameW, branchW, width int) string
 			sync = st(dimStyle).Render("✓")
 		}
 	}
-	line := mark + changes + sp(gap) +
+	group := ""
+	if gw := m.groupWidth(); gw > 0 {
+		group = sp(gw)
+		if m.inWorkspace(r.Name) {
+			group = st(branchStyle).Render("⌂") + sp(gw-1)
+		}
+	}
+	line := mark + changes + sp(gap) + group +
 		st(textStyle).Render(fmt.Sprintf("%-*.*s", nameW, nameW, r.Name)) + sp(gap) +
 		st(branchStyle).Render(fmt.Sprintf("%-*.*s", branchW, branchW, r.Branch)) + sp(gap) + sync
 	if selected {
@@ -423,7 +440,7 @@ func (m Model) help() string {
 	if m.focus == paneFiles {
 		return " " + strings.Join([]string{k("j/k", "file"), k("esc", "back"), k("↵", "lazygit"), k("c", "commit"), k("q", "quit")}, sep)
 	}
-	keys := []string{k("↵", "lazygit"), k("l", "files"), k("c", "commit"), k("p", "pull"), k("P", "push"), k("f", "fetch"), k("F", "fetch all"), k("R", "refresh"), k("/", "filter")}
+	keys := []string{k("↵", "lazygit"), k("l", "files"), k("c", "commit"), k("p", "pull"), k("P", "push"), k("/", "filter")}
 	if m.herdr.Available {
 		keys = append(keys, k("t", "herdr"))
 	}

@@ -15,10 +15,11 @@ in the one you pick. Press Esc to get back from lazygit to the overview.
 - Diff of the selected file, or the recent log when the repo is clean.
 - Enter opens lazygit in the selected repo; on exit the list is rescanned.
 - Commit dialog with subject and description; stages everything. Ctrl+G lets Claude Code write both.
-- Pull (`--ff-only`), push, fetch for one repo; fetch for all repos.
+- Pull (`--ff-only`) and push for the selected repo.
+- Refreshes on its own: status every 3 seconds, `git fetch --all` in every repo once a minute.
 - Name filter.
 - Keyboard and mouse selection.
-- Herdr: started inside a workspace, shows only that workspace's repos; jump to a repo's tab or open one.
+- Herdr: started inside a workspace, groups that workspace's repos first and marks them with ⌂; `w` narrows the list to them; jump to a repo's tab or open one.
 - Light and dark terminal themes.
 
 ## Install
@@ -56,9 +57,6 @@ lazyherd ~/code     # or any directory of repos
 | `c` | Commit dialog: subject and description, `tab` switches fields, `ctrl+g` writes both with `claude -p`, `enter` commits (`alt+enter` from the description) |
 | `p` | `git pull --ff-only` in the selected repo |
 | `P` | `git push` in the selected repo |
-| `f` | `git fetch --all` in the selected repo |
-| `F` | Fetch all repos |
-| `R` | Rescan |
 | `/` | Filter by name |
 | `t` | Jump to the repo's Herdr tab, or open one |
 | `w` | Toggle between the current Herdr workspace and all repos |
@@ -67,7 +65,7 @@ lazyherd ~/code     # or any directory of repos
 Notes:
 
 - Only the immediate subdirectories of the scanned directory are considered; symlinked directories are skipped.
-- Ahead/behind counts come from the local tracking refs and are as fresh as the last fetch. `F` fetches every scanned repo, including ones hidden by the filter.
+- Ahead/behind counts come from the local tracking refs; the background fetch keeps them at most a minute old.
 - Generated commit messages run `claude -p` inside the repo, so its `CLAUDE.md` conventions apply. The diff sent is capped at 60 kB.
 - Without Herdr, `t` and `w` are hidden and everything else works as usual.
 

@@ -3,8 +3,8 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -58,25 +58,25 @@ type Model struct {
 	commitBody    string // description below the subject
 	commitField   int    // 0 subject, 1 description
 	generating    bool   // claude is writing a commit message
-	workspaceOnly bool   // only repos with a pane in the current Herdr workspace
+	workspaceOnly bool   // only repos with a pane in the current Herdr workspace (w toggles)
 	status        string // transient note in the title bar
 }
 
 // New creates the model for a directory of repositories.
 func New(root string) Model {
 	return Model{
-		root:          root,
-		gen:           1,
-		loading:       true,
-		previews:      map[string]preview{},
-		pending:       map[string]struct{}{},
-		diffs:         map[string]string{},
-		workspaceOnly: os.Getenv("HERDR_WORKSPACE_ID") != "",
+		root:     root,
+		gen:      1,
+		loading:  true,
+		previews: map[string]preview{},
+		pending:  map[string]struct{}{},
+		diffs:    map[string]string{},
 	}
 }
 
-// Init starts the first scan; New already set the generation it belongs to.
-func (m Model) Init() tea.Cmd { return m.scanCmds() }
+// Init starts the first scan and the refresh timers; New already set the
+// generation the scan belongs to.
+func (m Model) Init() tea.Cmd { return tea.Batch(m.scanCmds(), refreshTick(), fetchTick()) }
 
 func (m Model) scanCmds() tea.Cmd {
 	return tea.Batch(scanCmd(m.gen, m.root), herdrCmd(m.gen, m.root))
@@ -132,7 +132,13 @@ func (m *Model) setRepos(repos []repo.Repo) {
 	m.applyFilter(keep)
 }
 
+// inWorkspace reports whether a repo has a pane in the current Herdr workspace.
+func (m Model) inWorkspace(name string) bool {
+	return m.herdr.Workspace != "" && m.herdr.Pane(name, m.herdr.Workspace) != nil
+}
+
 // applyFilter recomputes the visible rows and selects the repo named keep.
+// With a Herdr workspace the workspace's repos are grouped first.
 func (m *Model) applyFilter(keep string) {
 	m.visible = m.visible[:0]
 	f := strings.ToLower(m.filter)
@@ -140,16 +146,28 @@ func (m *Model) applyFilter(keep string) {
 		if f != "" && !strings.Contains(strings.ToLower(r.Name), f) {
 			continue
 		}
-		if m.workspaceOnly && m.herdr.Pane(r.Name, m.herdr.Workspace) == nil {
+		if m.workspaceOnly && !m.inWorkspace(r.Name) {
 			continue
 		}
 		m.visible = append(m.visible, i)
 	}
-	m.selectRepo(0)
+	if m.herdr.Workspace != "" && !m.workspaceOnly {
+		sort.SliceStable(m.visible, func(a, b int) bool {
+			return m.inWorkspace(m.repos[m.visible[a]].Name) && !m.inWorkspace(m.repos[m.visible[b]].Name)
+		})
+	}
+	m.cursor = 0
+	found := false
 	for i, idx := range m.visible {
 		if m.repos[idx].Name == keep {
-			m.selectRepo(i)
+			m.cursor, found = i, true
 		}
+	}
+	if !found {
+		m.fileCursor = 0
+	}
+	if m.currentFile() == nil {
+		m.focus = paneRepos
 	}
 }
 
@@ -161,7 +179,7 @@ func (m *Model) refilter() {
 	m.applyFilter(keep)
 }
 
-// selectRepo moves the repo cursor and resets the file selection.
+// selectRepo moves the repo cursor; the file selection resets when the repo changes.
 func (m *Model) selectRepo(i int) {
 	if i != m.cursor {
 		m.fileCursor = 0
@@ -170,6 +188,31 @@ func (m *Model) selectRepo(i int) {
 	if m.currentFile() == nil {
 		m.focus = paneRepos
 	}
+}
+
+// refreshCurrent reloads the preview and diff of the selected repo in place;
+// the old content stays on screen until the new one arrives.
+func (m Model) refreshCurrent() tea.Cmd {
+	r := m.current()
+	if r == nil {
+		return nil
+	}
+	var cmds []tea.Cmd
+	if _, pending := m.pending[r.Name]; !pending {
+		m.pending[r.Name] = struct{}{}
+		cmds = append(cmds, previewCmd(m.gen, m.root, r.Name))
+	}
+	if c := m.currentFile(); c != nil {
+		if m.diffs[diffKey(r.Name, c.Path)] != "" { // loaded, not pending
+			cmds = append(cmds, diffCmd(m.gen, m.root, r.Name, *c))
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+// idle reports whether nothing is running that a background refresh could disturb.
+func (m Model) idle() bool {
+	return m.busy == "" && !m.fetching && !m.committing && !m.generating && !m.loading
 }
 
 // load requests whatever the right pane needs for the current selection.
@@ -247,13 +290,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.diffs[diffKey(msg.name, msg.path)] = msg.text
 
+	case refreshMsg:
+		if !m.idle() {
+			return m, refreshTick()
+		}
+		return m, tea.Batch(scanCmd(m.gen, m.root), herdrCmd(m.gen, m.root), m.refreshCurrent(), refreshTick())
+
+	case autoFetchMsg:
+		if !m.idle() {
+			return m, fetchTick()
+		}
+		m.fetching = true
+		return m, tea.Batch(fetchCmd(m.root, m.repos), fetchTick())
+
 	case fetchDoneMsg:
 		m.fetching = false
-		cmd := m.rescan()
 		if len(msg.failed) > 0 {
 			m.status = fmt.Sprintf("fetch failed for %s", strings.Join(msg.failed, ", "))
 		}
-		return m, cmd
+		return m, scanCmd(m.gen, m.root)
 
 	case lazygitDoneMsg:
 		cmd := m.rescan()
@@ -448,15 +503,6 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "/":
 		m.filtering = true
-	case "r", "R":
-		return m, m.rescan()
-	case "F":
-		if !m.fetching {
-			m.fetching = true
-			return m, fetchCmd(m.root, m.repos)
-		}
-	case "f":
-		return m, m.gitOp("fetch", "fetch", "--all", "--quiet")
 	case "p":
 		return m, m.gitOp("pull", "pull", "--ff-only", "--quiet")
 	case "P":

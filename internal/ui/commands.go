@@ -2,6 +2,7 @@ package ui
 
 import (
 	"path/filepath"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -37,10 +38,24 @@ type (
 		op, name string
 		err      error
 	}
-	statusMsg string
+	statusMsg    string
+	refreshMsg   time.Time // periodic status refresh
+	autoFetchMsg time.Time // periodic background fetch
 )
 
-const previewCommits = 14
+const (
+	previewCommits = 14
+	refreshEvery   = 3 * time.Second
+	fetchEvery     = 60 * time.Second
+)
+
+func refreshTick() tea.Cmd {
+	return tea.Tick(refreshEvery, func(t time.Time) tea.Msg { return refreshMsg(t) })
+}
+
+func fetchTick() tea.Cmd {
+	return tea.Tick(fetchEvery, func(t time.Time) tea.Msg { return autoFetchMsg(t) })
+}
 
 func scanCmd(gen int, root string) tea.Cmd {
 	return func() tea.Msg {

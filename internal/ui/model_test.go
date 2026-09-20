@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -37,7 +39,7 @@ func run(t *testing.T, m Model, cmd tea.Cmd) Model {
 func TestInitialScanIsAccepted(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // no herdr
 	m := newTestModel(t)
-	m = run(t, m, m.Init())
+	m = run(t, m, m.scanCmds()) // Init also starts the timers, which a test must not wait for
 	if m.loading {
 		t.Fatal("initial scan result was dropped")
 	}
@@ -297,4 +299,59 @@ func TestWorkspaceToggle(t *testing.T) {
 	if m.workspaceOnly || len(m.visible) != 2 {
 		t.Fatal("w should switch back to all repos")
 	}
+}
+
+func TestWorkspaceReposAreGroupedFirst(t *testing.T) {
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	root := t.TempDir()
+	m := New(root)
+	m.setRepos([]repo.Repo{{Name: "a", Changes: 5}, {Name: "b"}, {Name: "c", Changes: 1}})
+	st := herdrStateWith(root, "w1", "c")
+	next, _ := m.Update(herdrMsg{gen: m.gen, state: st})
+	m = next.(Model)
+	if m.workspaceOnly {
+		t.Fatal("workspace mode should be off when the view is started with a grouped list")
+	}
+	if got := m.repos[m.visible[0]].Name; got != "c" {
+		t.Fatalf("workspace repo should come first, got %q", got)
+	}
+	if !m.inWorkspace("c") || m.inWorkspace("a") {
+		t.Fatal("inWorkspace wrong")
+	}
+	m.width, m.height = 120, 30
+	if !strings.Contains(m.View(), "⌂") {
+		t.Fatal("workspace repos should carry the ⌂ marker")
+	}
+}
+
+func TestRefreshKeepsSelectionAndSkipsWhenBusy(t *testing.T) {
+	m := newTestModel(t)
+	m.setRepos([]repo.Repo{{Name: "a"}, {Name: "b"}})
+	m.cursor = 1
+	next, _ := m.Update(scanMsg{gen: m.gen, repos: []repo.Repo{{Name: "b", Changes: 3}, {Name: "a"}}})
+	m = next.(Model)
+	if m.current().Name != "b" {
+		t.Fatalf("selection lost on background rescan: %v", m.current())
+	}
+	m.busy = "pull b"
+	if _, cmd := m.Update(refreshMsg(time.Now())); cmd == nil {
+		t.Fatal("refresh should at least re-arm its timer")
+	}
+}
+
+// herdrStateWith loads a Herdr state through a fake herdr binary that reports
+// one pane per named repo in the given workspace.
+func herdrStateWith(t_root, workspace string, repos ...string) herdr.State {
+	panes := ""
+	for i, r := range repos {
+		if i > 0 {
+			panes += ","
+		}
+		panes += `{"pane_id":"p` + r + `","tab_id":"t` + r + `","workspace_id":"` + workspace + `","cwd":"` + t_root + "/" + r + `"}`
+	}
+	bin, _ := os.MkdirTemp("", "fakeherdr")
+	script := "#!/bin/sh\ncase \"$1 $2\" in\n  \"pane list\") printf '%s' '{\"result\":{\"panes\":[" + panes + "]}}' ;;\n  \"workspace list\") printf '%s' '{\"result\":{\"workspaces\":[]}}' ;;\n  *) exit 1 ;;\nesac\n"
+	os.WriteFile(bin+"/herdr", []byte(script), 0o755)
+	os.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return herdr.Load(t_root)
 }
