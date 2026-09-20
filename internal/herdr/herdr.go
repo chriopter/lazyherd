@@ -2,6 +2,7 @@
 package herdr
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -9,7 +10,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
+
+const timeout = 5 * time.Second
 
 // Pane is a Herdr pane whose working directory lies inside one of the repos.
 type Pane struct {
@@ -28,8 +32,23 @@ type State struct {
 	labels map[string]string // workspace id -> label
 }
 
+// run executes a herdr command with a deadline.
+func run(args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "herdr", args...)
+	cmd.WaitDelay = time.Second
+	return cmd.Output()
+}
+
+// do executes a herdr command and reports only success or failure.
+func do(args ...string) error {
+	_, err := run(args...)
+	return err
+}
+
 func call(args ...string) (map[string]any, error) {
-	out, err := exec.Command("herdr", args...).Output()
+	out, err := run(args...)
 	if err != nil {
 		return nil, err
 	}
@@ -138,19 +157,19 @@ func SplitRight(pane, cwd string, ratio float64) (string, error) {
 
 // Run submits a command line in a pane that sits at a shell prompt.
 func Run(pane, command string) error {
-	return exec.Command("herdr", "pane", "run", pane, command).Run()
+	return do("pane", "run", pane, command)
 }
 
 // ClosePane closes a pane.
-func ClosePane(pane string) error { return exec.Command("herdr", "pane", "close", pane).Run() }
+func ClosePane(pane string) error { return do("pane", "close", pane) }
 
 // FocusRight moves focus to the pane right of pane.
 func FocusRight(pane string) error {
-	return exec.Command("herdr", "pane", "focus", "--direction", "right", "--pane", pane).Run()
+	return do("pane", "focus", "--direction", "right", "--pane", pane)
 }
 
 // FocusTab brings a tab to the front.
-func FocusTab(tabID string) error { return exec.Command("herdr", "tab", "focus", tabID).Run() }
+func FocusTab(tabID string) error { return do("tab", "focus", tabID) }
 
 // CreateTab opens and focuses a new tab in dir, in the given workspace if set.
 func CreateTab(workspace, dir, label string) error {
@@ -158,5 +177,5 @@ func CreateTab(workspace, dir, label string) error {
 	if workspace != "" {
 		args = append(args, "--workspace", workspace)
 	}
-	return exec.Command("herdr", args...).Run()
+	return do(args...)
 }

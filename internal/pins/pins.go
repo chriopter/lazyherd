@@ -5,6 +5,7 @@ package pins
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -35,7 +36,13 @@ func Load(path string) (*Store, error) {
 	if err != nil {
 		return s, err
 	}
-	return s, json.Unmarshal(raw, &s.byWS)
+	if err := json.Unmarshal(raw, &s.byWS); err != nil {
+		return s, fmt.Errorf("%s: %w", path, err)
+	}
+	if s.byWS == nil { // the file said "null"
+		s.byWS = map[string][]string{}
+	}
+	return s, nil
 }
 
 // Pinned reports whether repo is pinned to workspace.
@@ -79,5 +86,9 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, append(raw, '\n'), 0o644)
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, append(raw, '\n'), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.path)
 }

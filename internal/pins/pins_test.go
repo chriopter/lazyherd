@@ -1,6 +1,7 @@
 package pins
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -33,5 +34,23 @@ func TestToggleAndReload(t *testing.T) {
 	}
 	if again.Pinned("backend", "api") {
 		t.Fatal("unpin failed")
+	}
+}
+
+func TestLoadNullAndBroken(t *testing.T) {
+	dir := t.TempDir()
+	null := filepath.Join(dir, "null.json")
+	os.WriteFile(null, []byte("null\n"), 0o644)
+	s, err := Load(null)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Toggle("ws", "repo"); err != nil || !s.Pinned("ws", "repo") {
+		t.Fatal("toggle on a null file must work")
+	}
+	broken := filepath.Join(dir, "broken.json")
+	os.WriteFile(broken, []byte("{oops"), 0o644)
+	if _, err := Load(broken); err == nil {
+		t.Fatal("broken JSON should be reported")
 	}
 }

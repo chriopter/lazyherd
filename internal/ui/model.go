@@ -39,7 +39,8 @@ type Model struct {
 	version string
 	spin    int // spinner frame while something runs
 
-	gen           int // bumped on every rescan; stale results are dropped
+	gen           int  // bumped on every rescan; stale results are dropped
+	scanning      bool // a scan is in flight; ticks wait for it
 	width, height int
 	loading       bool
 	fetching      bool   // background fetch in progress
@@ -61,8 +62,8 @@ func New(root, version string) Model {
 
 // NewWithPins builds a model with an explicit pin file and default theme, for tests.
 func NewWithPins(root, pinPath string) Model {
-	store, _ := pins.Load(pinPath) // an unreadable file just means no pins
-	return Model{
+	store, err := pins.Load(pinPath)
+	m := Model{
 		root:    root,
 		pins:    store,
 		ownPane: os.Getenv("HERDR_PANE_ID"),
@@ -71,25 +72,35 @@ func NewWithPins(root, pinPath string) Model {
 		gen:     1,
 		loading: true,
 	}
+	if err != nil {
+		m.status = "pins: " + err.Error()
+	}
+	return m
 }
 
 // Init starts the first scan, the Herdr companion pane and the timers.
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.scanCmds(), refreshTick(), fetchTick(), spinTick()}
+	cmds := []tea.Cmd{scanCmd(m.gen, m.root), herdrCmd(m.gen, m.root), refreshTick(), fetchTick(), spinTick()}
 	if m.ownPane != "" {
 		cmds = append(cmds, companionCmd(m.root, m.ownPane))
 	}
 	return tea.Batch(cmds...)
 }
 
-func (m Model) scanCmds() tea.Cmd {
+// scanCmds starts a scan unless one is already running.
+func (m *Model) scanCmds() tea.Cmd {
+	if m.scanning {
+		return nil
+	}
+	m.scanning = true
 	return tea.Batch(scanCmd(m.gen, m.root), herdrCmd(m.gen, m.root))
 }
 
-// rescan starts a new scan generation.
+// rescan starts a new scan generation; a running scan's result is dropped.
 func (m *Model) rescan() tea.Cmd {
 	m.gen++
 	m.loading = true
+	m.scanning = false
 	return m.scanCmds()
 }
 
@@ -186,7 +197,7 @@ func (m *Model) showCurrent() {
 
 // idle reports whether nothing is running that a background refresh could disturb.
 func (m Model) idle() bool {
-	return m.busy == "" && !m.fetching && !m.loading
+	return m.busy == "" && !m.fetching && !m.loading && !m.scanning
 }
 
 // visibleRepos returns the repos currently listed, for the "all" actions.
@@ -207,7 +218,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.gen {
 			return m, nil
 		}
-		m.loading = false
+		m.loading, m.scanning = false, false
 		if msg.err != nil {
 			m.status = "scan failed: " + msg.err.Error()
 		}
@@ -249,7 +260,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.idle() {
 			return m, refreshTick()
 		}
-		return m, tea.Batch(scanCmd(m.gen, m.root), herdrCmd(m.gen, m.root), refreshTick())
+		return m, tea.Batch(m.scanCmds(), refreshTick())
 
 	case autoFetchMsg:
 		if !m.idle() {
@@ -263,7 +274,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg.failed) > 0 {
 			m.status = "fetch failed for " + strings.Join(msg.failed, ", ")
 		}
-		return m, scanCmd(m.gen, m.root)
+		return m, m.scanCmds()
 
 	case syncDoneMsg:
 		m.busy = ""
