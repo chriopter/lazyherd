@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,12 +33,30 @@ type State struct {
 	workspaceLabel string
 }
 
+// run executes a herdr subcommand; a failure carries the last line herdr
+// printed to stderr so the status bar shows the reason, not "exit status 1".
 func run(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "herdr", args...)
 	cmd.WaitDelay = time.Second
-	return cmd.Output()
+	out, err := cmd.Output()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("herdr %s: timed out", args[0]+" "+args[1])
+		}
+		if msg := lastLine(exit.Stderr); msg != "" {
+			return nil, fmt.Errorf("herdr %s: %s", args[0]+" "+args[1], msg)
+		}
+		return nil, fmt.Errorf("herdr %s: %w", args[0]+" "+args[1], err)
+	}
+	return out, err
+}
+
+func lastLine(b []byte) string {
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 func do(args ...string) error {

@@ -286,6 +286,18 @@ esac
 	}
 }
 
+func TestRunReportsHerdrStderr(t *testing.T) {
+	scriptOnPath(t, "herdr", `echo "some noise" >&2; echo "error: unknown flag --no-focus" >&2; exit 1`)
+	_, err := splitRight("own", t.TempDir(), 0.3)
+	if err == nil || err.Error() != "herdr pane split: error: unknown flag --no-focus" {
+		t.Fatalf("stderr not surfaced: %v", err)
+	}
+	scriptOnPath(t, "herdr", `exit 1`)
+	if err := runInPane("own", "true"); err == nil || err.Error() != "herdr pane run: exit status 1" {
+		t.Fatalf("silent failure: %v", err)
+	}
+}
+
 func TestSplitRejectsMissingPaneID(t *testing.T) {
 	scriptOnPath(t, "herdr", `printf '%s' '{"result":{"pane":{}}}'`)
 	if _, err := splitRight("own", t.TempDir(), 0.3); err == nil {
