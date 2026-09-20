@@ -30,11 +30,9 @@ source needs Go 1.24 or newer. `git` and `lazygit` must be on your `PATH`.
 ```sh
 lazyherd            # scans ~/git
 lazyherd ~/code     # or any directory of repos
-lh                  # same thing, shipped in the release archives
 ```
 
-With `go install` only `lazyherd` is built; add `alias lh=lazyherd` to your
-shell if you want the short name.
+Short on typing? `alias lh=lazyherd` in your shell rc.
 
 | Key | Action |
 |-----|--------|

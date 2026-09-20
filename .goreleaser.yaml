@@ -1,17 +1,8 @@
 version: 2
 
 builds:
-  - id: lazyherd
-    main: .
+  - main: .
     binary: lazyherd
-    env: [CGO_ENABLED=0]
-    goos: [linux, darwin]
-    goarch: [amd64, arm64]
-    ldflags: -s -w -X main.version={{ .Version }}
-  # The same program under its short name; both land in every archive.
-  - id: lh
-    main: .
-    binary: lh
     env: [CGO_ENABLED=0]
     goos: [linux, darwin]
     goarch: [amd64, arm64]
