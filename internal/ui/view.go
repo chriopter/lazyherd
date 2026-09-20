@@ -443,7 +443,7 @@ func (m Model) help() string {
 	if m.focus == paneFiles {
 		return " " + strings.Join([]string{k("j/k", "file"), k("esc", "back"), k("↵", "lazygit"), k("c", "commit"), k("q", "quit")}, sep)
 	}
-	keys := []string{k("↵", "lazygit"), k("l", "files"), k("c", "commit"), k("p", "pull"), k("P", "push"), k("/", "filter")}
+	keys := []string{k("↵", "lazygit"), k("l", "files"), k("c", "commit"), k("p", "sync"), k("P", "sync all"), k("/", "filter")}
 	if m.herdr.Available {
 		keys = append(keys, k("t", "herdr"))
 	}

@@ -339,6 +339,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "opened " + msg.name
 		return m, herdrCmd(m.gen, m.root) // the new pane changes the workspace view
 
+	case syncDoneMsg:
+		m.busy = ""
+		m.status = syncSummary(msg)
+		return m, m.rescan()
+
 	case opDoneMsg:
 		m.busy = ""
 		cmd := m.rescan()
@@ -522,9 +527,15 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		m.filtering = true
 	case "p":
-		return m, m.gitOp("pull", "pull", "--ff-only", "--quiet")
+		if r := m.current(); r != nil && m.busy == "" {
+			m.busy = "sync " + r.Name
+			return m, syncCmd(m.root, []repo.Repo{*r})
+		}
 	case "P":
-		return m, m.gitOp("push", "push", "--quiet")
+		if m.busy == "" && len(m.repos) > 0 {
+			m.busy = "sync all"
+			return m, syncCmd(m.root, m.repos)
+		}
 	case "w":
 		if m.herdr.Workspace != "" && m.herdr.Available {
 			m.workspaceOnly = !m.workspaceOnly
@@ -551,6 +562,28 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.jumpToHerdr()
 	}
 	return m, m.load()
+}
+
+// syncSummary condenses sync results into one status line.
+func syncSummary(results []repo.SyncResult) string {
+	var pulled, pushed int
+	var failed []string
+	for _, r := range results {
+		if r.Pulled {
+			pulled++
+		}
+		if r.Pushed {
+			pushed++
+		}
+		if r.Err != nil {
+			failed = append(failed, fmt.Sprintf("%s (%v)", r.Name, r.Err))
+		}
+	}
+	s := fmt.Sprintf("sync: %d pulled, %d pushed", pulled, pushed)
+	if len(failed) > 0 {
+		s += ", failed: " + strings.Join(failed, ", ")
+	}
+	return s
 }
 
 // gitOp starts a git operation in the selected repo unless one is running.

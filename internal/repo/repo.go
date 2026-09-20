@@ -218,6 +218,51 @@ func stripDiffHeader(diff string) string {
 	return diff
 }
 
+// SyncResult is what Sync did in one repository.
+type SyncResult struct {
+	Name   string
+	Pulled bool // new commits arrived
+	Pushed bool
+	Err    error
+}
+
+// Sync brings one repository in line with its upstream: a fast-forward pull,
+// then a push when local commits are ahead. Repositories without an upstream
+// are left alone.
+func Sync(root string, r Repo) SyncResult {
+	res := SyncResult{Name: r.Name}
+	if r.NoUpstream || r.Err != nil {
+		return res
+	}
+	dir := filepath.Join(root, r.Name)
+	before, _ := git(gitTimeout, dir, "rev-parse", "HEAD")
+	if _, err := git(fetchTimeout, dir, "pull", "--ff-only", "--quiet"); err != nil {
+		res.Err = fmt.Errorf("pull: %w", err)
+		return res
+	}
+	after, _ := git(gitTimeout, dir, "rev-parse", "HEAD")
+	res.Pulled = before != after
+	var behind, ahead int
+	if ab, err := git(gitTimeout, dir, "rev-list", "--left-right", "--count", "@{u}...HEAD"); err == nil {
+		fmt.Sscanf(ab, "%d %d", &behind, &ahead)
+	}
+	if ahead > 0 {
+		if _, err := git(fetchTimeout, dir, "push", "--quiet"); err != nil {
+			res.Err = fmt.Errorf("push: %w", err)
+			return res
+		}
+		res.Pushed = true
+	}
+	return res
+}
+
+// SyncAll runs Sync in every repository concurrently.
+func SyncAll(root string, repos []Repo) []SyncResult {
+	results := make([]SyncResult, len(repos))
+	parallel(repos, func(i int, r Repo) { results[i] = Sync(root, r) })
+	return results
+}
+
 // Run executes one git command in dir, for pull, push and single fetches.
 func Run(dir string, args ...string) error {
 	_, err := git(fetchTimeout, dir, args...)

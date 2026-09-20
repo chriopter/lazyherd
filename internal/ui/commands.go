@@ -38,6 +38,7 @@ type (
 		op, name string
 		err      error
 	}
+	syncDoneMsg  []repo.SyncResult
 	statusMsg    string
 	refreshMsg   time.Time // periodic status refresh
 	autoFetchMsg time.Time // periodic background fetch
@@ -94,7 +95,11 @@ func fetchCmd(root string, repos []repo.Repo) tea.Cmd {
 	return func() tea.Msg { return fetchDoneMsg{failed: repo.FetchAll(root, repos)} }
 }
 
-// gitOpCmd runs a named git operation in one repo, for p, P and f.
+func syncCmd(root string, repos []repo.Repo) tea.Cmd {
+	return func() tea.Msg { return syncDoneMsg(repo.SyncAll(root, repos)) }
+}
+
+// gitOpCmd runs a named git operation in one repo.
 func gitOpCmd(op, root, name string, args ...string) tea.Cmd {
 	return func() tea.Msg {
 		return opDoneMsg{op: op, name: name, err: repo.Run(filepath.Join(root, name), args...)}

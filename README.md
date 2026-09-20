@@ -15,7 +15,7 @@ in the one you pick. Press Esc to get back from lazygit to the overview.
 - Diff of the selected file, or the recent log when the repo is clean.
 - Enter opens lazygit in the selected repo; on exit the list is rescanned.
 - Commit dialog with subject and description; stages everything. Ctrl+G lets Claude Code write both.
-- Pull (`--ff-only`) and push for the selected repo.
+- Sync: fast-forward pull, then push when ahead; for the selected repo or for all repos at once.
 - Refreshes on its own: status every 3 seconds, `git fetch --all` in every repo once a minute.
 - Name filter.
 - Keyboard and mouse selection.
@@ -55,8 +55,8 @@ lazyherd ~/code     # or any directory of repos
 | `↵` | Open lazygit in the selected repo |
 | `l` | Move into the file tree; `j`/`k` pick a file, `esc` goes back |
 | `c` | Commit dialog: subject and description, `tab` switches fields, `ctrl+g` writes both with `claude -p`, `enter` commits (`alt+enter` from the description) |
-| `p` | `git pull --ff-only` in the selected repo |
-| `P` | `git push` in the selected repo |
+| `p` | Sync the selected repo: `git pull --ff-only`, then `git push` if ahead |
+| `P` | Sync all repos |
 | `/` | Filter by name |
 | `t` | Jump to the repo's Herdr tab, or open one |
 | `w` | Toggle between the current Herdr workspace and all repos |
