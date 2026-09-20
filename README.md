@@ -1,12 +1,9 @@
 # lazyherd
 
-A cockpit over every Git repository in one directory, sitting between
+A cockpit over all Git repos in one directory, between
 [lazygit](https://github.com/jesseduffield/lazygit) and
-[Herdr](https://herdr.dev). See which repos have uncommitted changes, which
-are ahead or behind, and press Enter to open lazygit in the one you pick.
-Quit lazygit and you are back in the cockpit. Run it inside a Herdr
-workspace and it narrows down to the repos your panes are working in, with a
-key to jump to their tab.
+[Herdr](https://herdr.dev): see what is dirty or out of sync, hit Enter to
+open lazygit there, or jump to the Herdr tab already working in it.
 
 ![lazyherd](docs/screenshot.png)
 
