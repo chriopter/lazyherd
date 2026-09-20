@@ -25,7 +25,15 @@ which are ahead or behind; the repo you select is opened in
 With [mise](https://mise.jdx.dev) (updates via `mise upgrade`):
 
 ```sh
-mise use -g ubi:chriopter/lazyherd
+mise use -g github:chriopter/lazyherd
+```
+
+mise hides releases younger than its `minimum_release_age` and then reports
+"no versions found matching date filter". To install a release that was
+just published, exclude this repo from the check once:
+
+```sh
+mise settings add minimum_release_age_excludes github:chriopter/lazyherd
 ```
 
 With Go:
