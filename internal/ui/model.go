@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -34,7 +35,8 @@ type Model struct {
 
 	theme   theme
 	version string
-	spin    int // spinner frame while something runs
+	spin    int   // spinner frame while something runs
+	now     int64 // unix time of the last scan, for the age column
 
 	gen           int    // bumped on every rescan; stale results are dropped
 	activity      string // what runs right now: "scanning", "fetching", "syncing …", or "" when idle
@@ -219,6 +221,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.activity = ""
+		m.now = time.Now().Unix()
 		if msg.err != nil {
 			m.status = "scan failed: " + msg.err.Error()
 		}

@@ -36,3 +36,14 @@ func TestParseStatusDetachedNoUpstream(t *testing.T) {
 		t.Fatalf("got %+v", st)
 	}
 }
+
+func TestAgo(t *testing.T) {
+	now := int64(1_000_000_000)
+	cases := map[int64]string{0: "", now: "0s", now - 59: "59s", now - 60: "1m", now - 3599: "59m",
+		now - 3600: "1h", now - 86400*3: "3d", now - 604800*2: "2w", now - 31536000/12*4: "4M", now - 31536000*2: "2y", now + 10: "0s"}
+	for ts, want := range cases {
+		if got := Ago(now, ts); got != want {
+			t.Errorf("Ago(%d) = %q, want %q", ts, got, want)
+		}
+	}
+}

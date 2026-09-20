@@ -53,10 +53,9 @@ func parallel(repos []Repo, fn func(i int, r Repo)) {
 	wg.Wait()
 }
 
-// Scan reads every repository directly under root with one git call each and
-// returns them sorted: most changes first, then most out of sync, then by
-// name. Only immediate children are considered; symlinked directories are
-// skipped.
+// Scan reads every repository directly under root and returns them sorted:
+// most changes first, then most out of sync, then most recently committed.
+// Only immediate children are considered; symlinked directories are skipped.
 func Scan(root string) ([]Repo, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -79,6 +78,9 @@ func Scan(root string) ([]Repo, error) {
 		}
 		if a.Ahead+a.Behind != b.Ahead+b.Behind {
 			return a.Ahead+a.Behind > b.Ahead+b.Behind
+		}
+		if a.Committed != b.Committed {
+			return a.Committed > b.Committed
 		}
 		return a.Name < b.Name
 	})

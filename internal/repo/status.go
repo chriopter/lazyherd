@@ -31,6 +31,7 @@ func dot(b byte) byte {
 // Status is everything one git status call tells about a repository.
 type Status struct {
 	Head       string // commit id
+	Committed  int64  // unix time of the HEAD commit, 0 when unborn
 	Branch     string // branch name, or "@<short id>" when detached
 	Ahead      int
 	Behind     int
@@ -44,7 +45,35 @@ func status(dir string) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	return parseStatus(out), nil
+	st := parseStatus(out)
+	if st.Head != "" && st.Head != "(initial)" {
+		if ts, err := git(gitTimeout, dir, "log", "-1", "--format=%ct", "HEAD"); err == nil {
+			st.Committed, _ = strconv.ParseInt(strings.TrimSpace(ts), 10, 64)
+		}
+	}
+	return st, nil
+}
+
+// Ago formats a unix timestamp the way lazygit does: "5m", "3h", "2d", "1w", "4M", "1y".
+func Ago(now, timestamp int64) string {
+	if timestamp == 0 {
+		return ""
+	}
+	secs := now - timestamp
+	if secs < 0 {
+		secs = 0
+	}
+	units := []struct {
+		label string
+		secs  int64
+	}{{"s", 1}, {"m", 60}, {"h", 3600}, {"d", 86400}, {"w", 604800}, {"M", 31536000 / 12}, {"y", 31536000}}
+	for i := 1; i < len(units); i++ {
+		if secs < units[i].secs {
+			return strconv.FormatInt(secs/units[i-1].secs, 10) + units[i-1].label
+		}
+	}
+	last := units[len(units)-1]
+	return strconv.FormatInt(secs/last.secs, 10) + last.label
 }
 
 // parseStatus parses git status --porcelain=v2 --branch output. With -z the

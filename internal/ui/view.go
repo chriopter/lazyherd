@@ -15,6 +15,8 @@ const (
 	minWidth     = 24
 	minHeight    = 8
 	branchMinW   = 44 // below this width the branch column is dropped
+	ageMinW      = 56 // below this width the last-commit column is dropped
+	ageW         = 4  // "12M "
 
 	// Screen row of the first repo line: status panel plus the list's top border.
 	repoRowsTop = statusPanelH + 1
@@ -159,7 +161,8 @@ func (m Model) style(style lipgloss.Style, selected bool) lipgloss.Style {
 // columns splits the free width between the name and branch columns: names
 // get what the longest visible name needs, branches take the rest. Narrow
 // lists drop the branch column.
-func (m Model) columns(width int) (nameW, branchW int) {
+// Wide lists also get the age of the last commit, right-aligned before SYNC.
+func (m Model) columns(width int) (nameW, branchW int, age bool) {
 	const countW, syncW = 3, 6
 	free := width - 1 - countW - 1 - m.groupWidth() - 1 - syncW
 	longest := 4
@@ -167,12 +170,15 @@ func (m Model) columns(width int) (nameW, branchW int) {
 		longest = max(longest, len(m.repos[i].Name))
 	}
 	if width < branchMinW {
-		return max(min(longest, free), 6), 0
+		return max(min(longest, free), 6), 0, false
 	}
 	free--
+	if age = width >= ageMinW; age {
+		free -= ageW + 1
+	}
 	nameW = max(min(longest, free-8), 8)
 	branchW = max(free-nameW, 8)
-	return nameW, branchW
+	return nameW, branchW, age
 }
 
 // groupWidth is the width of the workspace marker column, shown only when a
@@ -204,11 +210,11 @@ func (m Model) repoRowAt(y int) (int, bool) {
 }
 
 func (m Model) rows(width int) []string {
-	nameW, branchW := m.columns(width)
+	nameW, branchW, age := m.columns(width)
 	start, count := m.repoWindow()
 	var rows []string
 	for i := start; i < len(m.visible) && i-start < count; i++ {
-		rows = append(rows, m.row(m.repos[m.visible[i]], i == m.cursor, nameW, branchW, width))
+		rows = append(rows, m.row(m.repos[m.visible[i]], i == m.cursor, nameW, branchW, age, width))
 	}
 	if len(m.visible) == 0 && m.activity != "scanning" {
 		rows = append(rows, dim.Render(" no repositories"))
@@ -216,7 +222,7 @@ func (m Model) rows(width int) []string {
 	return rows
 }
 
-func (m Model) row(r repo.Repo, selected bool, nameW, branchW, width int) string {
+func (m Model) row(r repo.Repo, selected bool, nameW, branchW int, age bool, width int) string {
 	sp := func(n int) string {
 		return m.style(lipgloss.NewStyle(), selected).Render(strings.Repeat(" ", n))
 	}
@@ -250,6 +256,9 @@ func (m Model) row(r repo.Repo, selected bool, nameW, branchW, width int) string
 			branch = m.theme.icons.branch + " " + branch
 		}
 		line += sp(1) + m.style(m.theme.text, selected).Render(fmt.Sprintf("%-*.*s", branchW, branchW, branch))
+	}
+	if age {
+		line += sp(1) + m.style(dim, selected).Render(fmt.Sprintf("%*s", ageW, repo.Ago(m.now, r.Committed)))
 	}
 	line += sp(1) + m.syncState(r, selected)
 	if selected {

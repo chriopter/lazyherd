@@ -10,7 +10,7 @@ which are ahead or behind; the repo you select is opened in
 ## Features
 
 - Scans every Git repository directly under one directory, one `git status` call each, in parallel.
-- Repo list with number of changed files, branch, ahead/behind counts; dirty repos first.
+- Repo list with number of changed files, branch, age of the last commit and ahead/behind counts; dirty repos first, then out of sync, then most recently committed.
 - Inside Herdr: splits a pane to the right and keeps lazygit open there for the selected repo. Moving the selection switches the repo.
 - Outside Herdr: Enter opens lazygit full screen; quitting it returns to the list.
 - Sync: fast-forward pull, then push when ahead; for the selected repo or every listed repo.
