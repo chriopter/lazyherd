@@ -152,7 +152,7 @@ func TestSyncKeys(t *testing.T) {
 	m := newTestModel(t)
 	m.setRepos([]repo.Repo{{Name: "a"}, {Name: "b"}})
 	m, cmd := press(t, m, "p")
-	if cmd == nil || m.busy != "sync a" {
+	if cmd == nil || m.busy != "syncing a" {
 		t.Fatalf("p should sync the selected repo, busy=%q", m.busy)
 	}
 	if _, cmd := press(t, m, "P"); cmd != nil {
@@ -166,7 +166,7 @@ func TestSyncKeys(t *testing.T) {
 	m.filter = "b"
 	m.refilter()
 	m, _ = press(t, m, "P")
-	if m.busy != "sync 1 repos" {
+	if m.busy != "syncing 1 repos" {
 		t.Fatalf("P should sync the listed repos only, busy=%q", m.busy)
 	}
 }
@@ -180,7 +180,7 @@ func TestRefreshKeepsSelectionAndSkipsWhenBusy(t *testing.T) {
 	if m.current().Name != "b" {
 		t.Fatalf("selection lost on background rescan: %v", m.current())
 	}
-	m.busy = "sync b"
+	m.busy = "syncing b"
 	if _, cmd := m.Update(refreshMsg(time.Now())); cmd == nil {
 		t.Fatal("refresh should at least re-arm its timer")
 	}

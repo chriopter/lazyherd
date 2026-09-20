@@ -15,6 +15,7 @@ import (
 
 	"github.com/chriopter/lazyherd/internal/follow"
 	"github.com/chriopter/lazyherd/internal/herdr"
+	"github.com/chriopter/lazyherd/internal/lazygit"
 	"github.com/chriopter/lazyherd/internal/pins"
 	"github.com/chriopter/lazyherd/internal/repo"
 )
@@ -34,6 +35,10 @@ type Model struct {
 	selSeq        int            // bumped on every selection change, for debouncing
 	shown         string         // repo the companion currently shows
 
+	theme   theme
+	version string
+	spin    int // spinner frame while something runs
+
 	gen           int // bumped on every rescan; stale results are dropped
 	width, height int
 	loading       bool
@@ -45,18 +50,24 @@ type Model struct {
 	status        string // transient note in the title bar
 }
 
-// New creates the model for a directory of repositories.
-func New(root string) Model {
-	return NewWithPins(root, pins.Path())
+// New creates the model for a directory of repositories, styled after the
+// user's lazygit configuration.
+func New(root, version string) Model {
+	m := NewWithPins(root, pins.Path())
+	m.version = version
+	m.theme = newTheme(lazygit.Load(lazygit.Path()))
+	return m
 }
 
-// NewWithPins is New with an explicit pin file, for tests.
+// NewWithPins builds a model with an explicit pin file and default theme, for tests.
 func NewWithPins(root, pinPath string) Model {
 	store, _ := pins.Load(pinPath) // an unreadable file just means no pins
 	return Model{
 		root:    root,
 		pins:    store,
 		ownPane: os.Getenv("HERDR_PANE_ID"),
+		theme:   newTheme(lazygit.Default()),
+		version: "dev",
 		gen:     1,
 		loading: true,
 	}
@@ -64,7 +75,7 @@ func NewWithPins(root, pinPath string) Model {
 
 // Init starts the first scan, the Herdr companion pane and the timers.
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.scanCmds(), refreshTick(), fetchTick()}
+	cmds := []tea.Cmd{m.scanCmds(), refreshTick(), fetchTick(), spinTick()}
 	if m.ownPane != "" {
 		cmds = append(cmds, companionCmd(m.root, m.ownPane))
 	}
@@ -228,6 +239,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showCurrent()
 		}
 
+	case spinMsg:
+		if !m.idle() {
+			m.spin++
+			return m, spinTick()
+		}
+
 	case refreshMsg:
 		if !m.idle() {
 			return m, refreshTick()
@@ -239,7 +256,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, fetchTick()
 		}
 		m.fetching = true
-		return m, tea.Batch(fetchCmd(m.root, m.repos), fetchTick())
+		return m, tea.Batch(fetchCmd(m.root, m.repos), fetchTick(), spinTick())
 
 	case fetchDoneMsg:
 		m.fetching = false
@@ -343,13 +360,13 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "p":
 		if r := m.current(); r != nil && m.busy == "" {
-			m.busy = "sync " + r.Name
-			return m, syncCmd(m.root, []repo.Repo{*r})
+			m.busy = "syncing " + r.Name
+			return m, tea.Batch(syncCmd(m.root, []repo.Repo{*r}), spinTick())
 		}
 	case "P":
 		if m.busy == "" && len(m.visible) > 0 {
-			m.busy = fmt.Sprintf("sync %d repos", len(m.visible))
-			return m, syncCmd(m.root, m.visibleRepos())
+			m.busy = fmt.Sprintf("syncing %d repos", len(m.visible))
+			return m, tea.Batch(syncCmd(m.root, m.visibleRepos()), spinTick())
 		}
 
 	case "w":

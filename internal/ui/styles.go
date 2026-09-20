@@ -1,30 +1,51 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
 
-var (
-	colorAccent   = lipgloss.AdaptiveColor{Light: "#5A4FCF", Dark: "#8B7CFF"}
-	colorDim      = lipgloss.AdaptiveColor{Light: "#8A8A8A", Dark: "#6C6C6C"}
-	colorText     = lipgloss.AdaptiveColor{Light: "#222222", Dark: "#DDDDDD"}
-	colorWarn     = lipgloss.AdaptiveColor{Light: "#B26B00", Dark: "#F2B34E"}
-	colorGood     = lipgloss.AdaptiveColor{Light: "#1F7A3A", Dark: "#6CD483"}
-	colorBad      = lipgloss.AdaptiveColor{Light: "#B0303A", Dark: "#FF7B85"}
-	colorSelected = lipgloss.AdaptiveColor{Light: "#E6E2FF", Dark: "#33305A"}
-
-	titleStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(colorAccent).Padding(0, 1)
-	headerStyle       = lipgloss.NewStyle().Bold(true).Foreground(colorDim)
-	textStyle         = lipgloss.NewStyle().Foreground(colorText)
-	dimStyle          = lipgloss.NewStyle().Foreground(colorDim)
-	dirtyStyle        = lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
-	cleanStyle        = lipgloss.NewStyle().Foreground(colorGood)
-	aheadStyle        = lipgloss.NewStyle().Foreground(colorGood)
-	behindStyle       = lipgloss.NewStyle().Foreground(colorBad)
-	errorStyle        = lipgloss.NewStyle().Foreground(colorBad).Bold(true)
-	branchStyle       = lipgloss.NewStyle().Foreground(colorAccent)
-	keyStyle          = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
-	filterStyle       = lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
-	paneStyle         = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorDim).Padding(0, 1)
-	activePaneStyle   = paneStyle.BorderForeground(colorAccent)
-	previewTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
-	sectionStyle      = lipgloss.NewStyle().Bold(true).Foreground(colorDim)
+	"github.com/chriopter/lazyherd/internal/lazygit"
 )
+
+// theme is lazyherd's look, derived from the user's lazygit configuration so
+// both panes match. Colors are the terminal's ANSI palette unless the user
+// configured others.
+type theme struct {
+	frame           [6]rune
+	icons           *lazygit.Icons
+	activeBorder    lipgloss.Style
+	inactiveBorder  lipgloss.Style
+	searchingBorder lipgloss.Style
+	options         lipgloss.Style
+	selectedBg      lipgloss.Style
+	unstaged        lipgloss.Style
+	text            lipgloss.Style
+}
+
+func newTheme(cfg lazygit.Config) theme {
+	t := cfg.Gui.Theme
+	return theme{
+		frame:           lazygit.FrameRunes(cfg.Gui.Border),
+		icons:           lazygit.IconsFor(cfg.Gui.NerdFontsVersion),
+		activeBorder:    lazygit.Style(t.ActiveBorderColor, false),
+		inactiveBorder:  lazygit.Style(t.InactiveBorderColor, false),
+		searchingBorder: lazygit.Style(t.SearchingActiveBorderColor, false),
+		options:         lazygit.Style(t.OptionsTextColor, false),
+		selectedBg:      lazygit.Style(t.SelectedLineBgColor, true),
+		unstaged:        lazygit.Style(t.UnstagedChangesColor, false),
+		text:            lazygit.Style(t.DefaultFgColor, false),
+	}
+}
+
+// Fixed colors lazygit uses regardless of theme, from its presentation code.
+var (
+	green   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	yellow  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	red     = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	magenta = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
+	cyan    = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	dim     = lipgloss.NewStyle().Faint(true)
+	bold    = lipgloss.NewStyle().Bold(true)
+)
+
+// spinner is lazygit's default loader.
+var spinner = []string{"●∙∙", "∙●∙", "∙∙●", "∙●∙"}

@@ -17,7 +17,8 @@ which are ahead or behind; the repo you select is opened in
 - Refreshes on its own: status every 3 seconds, `git fetch --all` in every repo once a minute.
 - Name filter.
 - Herdr workspaces: repos with a pane in the current workspace come first, marked ⌂; Space pins any other repo to the workspace (★); `w` narrows the list to them; `t` jumps to a repo's tab or opens one.
-- Keyboard and mouse selection, light and dark terminal themes.
+- Looks like lazygit: same frames, status panel, options bar and colors. Reads `~/.config/lazygit/config.yml` for the theme, border style and nerd-font icons, so both panes match.
+- Keyboard and mouse selection.
 
 ## Install
 
@@ -64,6 +65,7 @@ Notes:
 - The lazygit pane is a Herdr pane running `lazyherd follow <socket>`, which starts `lazygit -p <repo>` for each selection. Quit lazygit with `q` and the next selection starts it again.
 - Pins are stored in `~/.config/lazyherd/pins.json`, keyed by workspace name.
 - Without Herdr, `t`, `w` and Space are hidden and everything else works as usual.
+- Theme keys honoured from lazygit's config: `gui.border`, `gui.nerdFontsVersion`, `gui.theme.activeBorderColor`, `inactiveBorderColor`, `searchingActiveBorderColor`, `optionsTextColor`, `selectedLineBgColor`, `unstagedChangesColor`, `defaultFgColor`.
 
 ## Development
 

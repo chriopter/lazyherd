@@ -63,7 +63,7 @@ Flags:
 		fmt.Fprintf(os.Stderr, "lazyherd: %s is not a directory\n", root)
 		os.Exit(1)
 	}
-	if _, err := tea.NewProgram(ui.New(root), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
+	if _, err := tea.NewProgram(ui.New(root, version), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

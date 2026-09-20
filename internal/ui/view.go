@@ -2,8 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -11,18 +9,15 @@ import (
 	"github.com/chriopter/lazyherd/internal/repo"
 )
 
+// Layout, top to bottom: status panel (3 rows), repos panel, options line.
 const (
-	colChanges   = 4
-	colGroup     = 2 // "⌂ " for repos of the current Herdr workspace
-	colBranchMin = 8
-	colSync      = 7
-	gap          = 2
+	statusPanelH = 3
 	minWidth     = 24
-	minHeight    = 6
+	minHeight    = 8
 	branchMinW   = 44 // below this width the branch column is dropped
 
-	// Screen rows above the first list entry: title line, top border, header.
-	repoRowsTop = 3
+	// Screen row of the first repo line: status panel plus the list's top border.
+	repoRowsTop = statusPanelH + 1
 )
 
 func (m Model) View() string {
@@ -32,63 +27,143 @@ func (m Model) View() string {
 	if m.width < minWidth || m.height < minHeight {
 		return fmt.Sprintf("lazyherd needs at least %dx%d\n", minWidth, minHeight)
 	}
-	innerH := m.height - 4 // title, help, two borders
-	style := activePaneStyle
-	if m.filtering {
-		style = paneStyle
-	}
+	listH := m.height - statusPanelH - 1 // options line
 	line := lipgloss.NewStyle().MaxWidth(m.width)
-	return line.Render(m.title()) + "\n" +
-		style.Width(m.width-2).Height(innerH).MaxHeight(innerH+2).Render(m.table(m.width-4, innerH)) + "\n" +
-		line.Render(m.help())
+	return m.statusPanel() + "\n" + m.reposPanel(listH) + "\n" + line.Render(m.bottomLine())
 }
 
-func (m Model) title() string {
-	dirty := 0
-	for _, r := range m.repos {
-		if r.Dirty() {
-			dirty++
-		}
-	}
-	t := titleStyle.Render("lazyherd") + " " + dimStyle.Render(fmt.Sprintf("%d · ", len(m.repos))) + dirtyStyle.Render(fmt.Sprintf("%d dirty", dirty))
+// border picks the frame style the way lazygit does: green when active,
+// cyan while searching, plain otherwise.
+func (m Model) border(active bool) lipgloss.Style {
 	switch {
-	case m.loading:
-		t += dimStyle.Render("  ⟳")
-	case m.fetching:
-		t += dimStyle.Render("  ⇣")
-	case m.busy != "":
-		t += dimStyle.Render("  ⟳ " + m.busy)
+	case active && m.filtering:
+		return m.theme.searchingBorder
+	case active:
+		return m.theme.activeBorder
 	}
+	return m.theme.inactiveBorder
+}
+
+// frame draws a gocui-style box: the title sits in the top border after a
+// "[n]" prefix, the subtitle at the top right, the footer at the bottom right.
+func (m Model) frame(index int, title, subtitle, footer string, body []string, width, height int, style lipgloss.Style) string {
+	r := m.theme.frame
+	h, v := string(r[0]), string(r[1])
+	inner := width - 2
+
+	top := fmt.Sprintf("%s[%d]%s%s", h, index, h, title)
+	if subtitle != "" && lipgloss.Width(top)+lipgloss.Width(subtitle)+6 <= inner {
+		top += strings.Repeat(h, inner-lipgloss.Width(top)-lipgloss.Width(subtitle)-4) + subtitle + strings.Repeat(h, 4)
+	}
+	top = string(r[2]) + top + strings.Repeat(h, max(inner-lipgloss.Width(top), 0)) + string(r[3])
+
+	bottom := strings.Repeat(h, inner)
+	if footer != "" && lipgloss.Width(footer)+1 <= inner {
+		bottom = strings.Repeat(h, inner-lipgloss.Width(footer)-1) + footer + h
+	}
+	bottom = string(r[4]) + bottom + string(r[5])
+
+	rows := make([]string, 0, height)
+	rows = append(rows, style.Render(top))
+	for i := 0; i < height-2; i++ {
+		content := ""
+		if i < len(body) {
+			content = body[i]
+		}
+		content = lipgloss.NewStyle().MaxWidth(inner).Render(content)
+		content += strings.Repeat(" ", max(inner-lipgloss.Width(content), 0))
+		rows = append(rows, style.Render(v)+content+style.Render(v))
+	}
+	rows = append(rows, style.Render(bottom))
+	return strings.Join(rows, "\n")
+}
+
+// statusPanel mirrors lazygit's status view for the selected repo:
+// "✓ repo → branch", with the sync state in front.
+func (m Model) statusPanel() string {
+	body := ""
+	if r := m.current(); r != nil {
+		body = m.syncState(*r, false)
+		if body != "" {
+			body += " "
+		}
+		body += r.Name + " → " + m.branchName(*r, false)
+	} else if m.loading {
+		body = dim.Render("scanning " + spinner[m.spin%len(spinner)])
+	}
+	return m.frame(0, "Status", "", "", []string{body}, m.width, statusPanelH, m.border(false))
+}
+
+func (m Model) reposPanel(height int) string {
+	subtitle := ""
 	if m.herdr.Workspace != "" && m.herdr.Available {
 		if m.workspaceOnly {
-			t += "  " + filterStyle.Render("⌂ "+m.herdr.WorkspaceLabel())
+			subtitle = "⌂ " + m.herdr.WorkspaceLabel()
 		} else {
-			t += "  " + dimStyle.Render("⌂ "+m.herdr.WorkspaceLabel()+" (all)")
+			subtitle = "⌂ " + m.herdr.WorkspaceLabel() + " (all)"
 		}
 	}
-	if m.filtering || m.filter != "" {
-		t += "  " + filterStyle.Render("/"+m.filter+"▏")
+	title := "Repos"
+	if m.filter != "" {
+		title += " (filtered)"
 	}
-	if m.status != "" {
-		t += "  " + dimStyle.Render(m.status)
+	footer := ""
+	if len(m.visible) > 0 {
+		footer = fmt.Sprintf("%d of %d", m.cursor+1, len(m.visible))
 	}
-	return t
+	return m.frame(1, title, subtitle, footer, m.rows(m.width-2), m.width, height, m.border(true))
 }
 
-// groupWidth is the width of the workspace marker column, shown only when a
-// Herdr workspace is known and the list mixes its repos with the others.
-func (m Model) groupWidth() int {
-	if m.herdr.Workspace != "" && m.herdr.Available && !m.workspaceOnly {
-		return colGroup
+// syncState renders the branch status the way lazygit's BranchStatus does.
+func (m Model) syncState(r repo.Repo, selected bool) string {
+	st := m.highlight(selected)
+	switch {
+	case r.Err != nil:
+		return st(red).Render("!")
+	case r.NoUpstream:
+		return ""
+	case r.Ahead == 0 && r.Behind == 0:
+		return st(green).Render("✓")
+	case r.Ahead > 0 && r.Behind > 0:
+		return st(yellow).Render(fmt.Sprintf("↓%d↑%d", r.Behind, r.Ahead))
+	case r.Behind > 0:
+		return st(yellow).Render(fmt.Sprintf("↓%d", r.Behind))
+	default:
+		return st(yellow).Render(fmt.Sprintf("↑%d", r.Ahead))
 	}
-	return 0
+}
+
+// branchName renders the branch with lazygit's icon when icons are on.
+func (m Model) branchName(r repo.Repo, selected bool) string {
+	st := m.highlight(selected)
+	name := r.Branch
+	if m.theme.icons != nil {
+		icon := m.theme.icons.Branch
+		if strings.HasPrefix(name, "@") {
+			icon = m.theme.icons.DetachedHead
+		}
+		name = icon + " " + name
+	}
+	return st(m.theme.text).Render(name)
+}
+
+// highlight returns a style modifier that adds lazygit's selected-line
+// background while keeping each segment's own foreground.
+func (m Model) highlight(selected bool) func(lipgloss.Style) lipgloss.Style {
+	return func(s lipgloss.Style) lipgloss.Style {
+		if selected {
+			return s.Inherit(m.theme.selectedBg).Bold(true)
+		}
+		return s
+	}
 }
 
 // columns splits the free width between the name and branch columns: names
 // get what the longest visible name needs, branches take the rest. Narrow
 // lists drop the branch column.
 func (m Model) columns(width int) (nameW, branchW int) {
-	free := width - 1 - colChanges - m.groupWidth() - 2*gap - colSync - 1
+	const countW, syncW = 3, 6
+	free := width - 1 - countW - 1 - m.groupWidth() - 1 - syncW
 	longest := 4
 	for _, i := range m.visible {
 		longest = max(longest, len(m.repos[i].Name))
@@ -96,15 +171,24 @@ func (m Model) columns(width int) (nameW, branchW int) {
 	if width < branchMinW {
 		return max(min(longest, free), 6), 0
 	}
-	free -= gap
-	nameW = max(min(longest, free-colBranchMin), 8)
-	branchW = max(free-nameW, colBranchMin)
+	free--
+	nameW = max(min(longest, free-8), 8)
+	branchW = max(free-nameW, 8)
 	return nameW, branchW
+}
+
+// groupWidth is the width of the workspace marker column, shown only when a
+// Herdr workspace is known and the list mixes its repos with the others.
+func (m Model) groupWidth() int {
+	if m.herdr.Workspace != "" && m.herdr.Available && !m.workspaceOnly {
+		return 2
+	}
+	return 0
 }
 
 // repoWindow is the range of visible repo rows that fits the list height.
 func (m Model) repoWindow() (start, count int) {
-	count = max(m.height-5, 1)
+	count = max(m.height-statusPanelH-3, 1) // list borders and options line
 	if m.cursor >= count {
 		start = m.cursor - count + 1
 	}
@@ -121,133 +205,124 @@ func (m Model) repoRowAt(y int) (int, bool) {
 	return i, true
 }
 
-func (m Model) table(width, height int) string {
+func (m Model) rows(width int) []string {
 	nameW, branchW := m.columns(width)
-	head := fmt.Sprintf(" %*s  %*s%-*s", colChanges, "CHG", m.groupWidth(), "", nameW, "REPO")
-	if branchW > 0 {
-		head += fmt.Sprintf("  %-*s", branchW, "BRANCH")
-	}
-	rows := []string{headerStyle.Render(head + "  SYNC")}
 	start, count := m.repoWindow()
+	var rows []string
 	for i := start; i < len(m.visible) && i-start < count; i++ {
 		rows = append(rows, m.row(m.repos[m.visible[i]], i == m.cursor, nameW, branchW, width))
 	}
 	if len(m.visible) == 0 && !m.loading {
-		rows = append(rows, dimStyle.Render("no repositories"))
+		rows = append(rows, dim.Render(" no repositories"))
 	}
-	return strings.Join(rows, "\n")
-}
-
-// highlight returns a style modifier that adds the selection background.
-func highlight(selected bool) func(lipgloss.Style) lipgloss.Style {
-	return func(s lipgloss.Style) lipgloss.Style {
-		if selected {
-			return s.Background(colorSelected).Bold(true)
-		}
-		return s
-	}
+	return rows
 }
 
 func (m Model) row(r repo.Repo, selected bool, nameW, branchW, width int) string {
-	st := highlight(selected)
+	st := m.highlight(selected)
 	sp := func(n int) string { return st(lipgloss.NewStyle()).Render(strings.Repeat(" ", n)) }
 
-	mark := sp(1)
-	if selected {
-		mark = st(branchStyle).Render("▶")
-	}
-	var changes, sync string
-	switch {
-	case r.Err != nil:
-		changes = st(errorStyle).Render(fmt.Sprintf("%*s", colChanges, "!"))
-		sync = st(errorStyle).Render("error")
-	case r.Dirty():
-		changes = st(dirtyStyle).Render(fmt.Sprintf("%*d", colChanges, len(r.Changes)))
-	default:
-		changes = st(cleanStyle).Render(fmt.Sprintf("%*s", colChanges, "·"))
-	}
-	if r.Err == nil {
-		switch {
-		case r.NoUpstream:
-			sync = st(dimStyle).Render("no up")
-		case r.Ahead > 0 && r.Behind > 0:
-			sync = st(behindStyle).Render(fmt.Sprintf("↓%d", r.Behind)) + sp(1) + st(aheadStyle).Render(fmt.Sprintf("↑%d", r.Ahead))
-		case r.Ahead > 0:
-			sync = st(aheadStyle).Render(fmt.Sprintf("↑%d", r.Ahead))
-		case r.Behind > 0:
-			sync = st(behindStyle).Render(fmt.Sprintf("↓%d", r.Behind))
-		default:
-			sync = st(dimStyle).Render("✓")
+	// Change count in lazygit's unstaged color, staged-only changes in green.
+	count := sp(3)
+	if r.Err == nil && r.Dirty() {
+		style := green
+		for _, c := range r.Changes {
+			if c.Untracked || c.Unstaged != '.' {
+				style = m.theme.unstaged
+				break
+			}
 		}
+		count = st(style).Render(fmt.Sprintf("%3d", len(r.Changes)))
 	}
 	group := ""
 	if gw := m.groupWidth(); gw > 0 {
 		group = sp(gw)
 		switch {
 		case m.pinned(r.Name):
-			group = st(dirtyStyle).Render("★") + sp(gw-1)
+			group = st(yellow).Render("★") + sp(gw-1)
 		case m.inWorkspace(r.Name):
-			group = st(branchStyle).Render("⌂") + sp(gw-1)
+			group = st(cyan).Render("⌂") + sp(gw-1)
 		}
 	}
-	line := mark + changes + sp(gap) + group + st(textStyle).Render(fmt.Sprintf("%-*.*s", nameW, nameW, r.Name))
+	line := sp(1) + count + sp(1) + group + st(m.theme.text).Render(fmt.Sprintf("%-*.*s", nameW, nameW, r.Name))
 	if branchW > 0 {
-		line += sp(gap) + st(branchStyle).Render(fmt.Sprintf("%-*.*s", branchW, branchW, r.Branch))
+		branch := r.Branch
+		if m.theme.icons != nil {
+			branch = m.theme.icons.Branch + " " + branch
+		}
+		line += sp(1) + st(m.theme.text).Render(fmt.Sprintf("%-*.*s", branchW, branchW, branch))
 	}
-	line += sp(gap) + sync
+	line += sp(1) + m.syncState(r, selected)
 	if selected {
 		line += sp(max(width-lipgloss.Width(line), 0))
 	}
 	return lipgloss.NewStyle().MaxWidth(width).Render(line)
 }
 
-func (m Model) help() string {
-	k := func(key, desc string) string { return keyStyle.Render(key) + dimStyle.Render(" "+desc) }
-	sep := dimStyle.Render(" · ")
-	open := k("↵", "lazygit")
-	if m.companionPane != "" {
-		open = k("↵", "to lazygit")
+// bottomLine is lazygit's options bar: "Desc: key | Desc: key", with the
+// filter prompt taking over while typing and the version at the right.
+func (m Model) bottomLine() string {
+	left := ""
+	switch {
+	case m.filtering:
+		left = "Filter: " + m.filter
+	case m.status != "":
+		left = yellow.Render(m.status)
+	default:
+		left = m.options()
 	}
-	keys := []string{open, k("p", "sync"), k("P", "sync listed"), k("/", "filter")}
+	right := ""
+	switch {
+	case m.busy != "":
+		right = cyan.Render(m.busy + " " + spinner[m.spin%len(spinner)])
+	case m.fetching:
+		right = dim.Render("fetching " + spinner[m.spin%len(spinner)])
+	default:
+		right = dim.Render("lazyherd " + m.version)
+	}
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 1
+	if gap < 1 {
+		return " " + left
+	}
+	return " " + left + strings.Repeat(" ", gap) + right
+}
+
+func (m Model) options() string {
+	type opt struct{ desc, key string }
+	opts := []opt{{"Open", "<enter>"}, {"Sync", "p"}, {"Sync listed", "P"}, {"Filter", "/"}}
 	if m.herdr.Available {
-		keys = append(keys, k("t", "herdr"))
+		opts = append(opts, opt{"Herdr tab", "t"})
 	}
 	if m.herdr.Workspace != "" && m.herdr.Available {
 		if m.workspaceOnly {
-			keys = append(keys, k("w", "all repos"))
+			opts = append(opts, opt{"All repos", "w"})
 		} else {
-			keys = append(keys, k("w", "workspace"))
+			opts = append(opts, opt{"Workspace", "w"})
 		}
 		if r := m.current(); r != nil && m.pinned(r.Name) {
-			keys = append(keys, k("␣", "unpin"))
+			opts = append(opts, opt{"Unpin", "<space>"})
 		} else {
-			keys = append(keys, k("␣", "pin"))
+			opts = append(opts, opt{"Pin", "<space>"})
 		}
 	}
-	keys = append(keys, k("q", "quit"))
-	help := " " + strings.Join(keys, sep)
-	if lipgloss.Width(help) > m.width {
-		// Narrow pane: keys only, in the same order.
-		short := []string{"↵", "p", "P", "/"}
-		if m.herdr.Available {
-			short = append(short, "t")
-		}
-		if m.herdr.Workspace != "" && m.herdr.Available {
-			short = append(short, "w", "␣")
-		}
-		short = append(short, "q")
-		for i, s := range short {
-			short[i] = keyStyle.Render(s)
-		}
-		help = " " + strings.Join(short, sep)
-	}
-	return help
-}
+	opts = append(opts, opt{"Quit", "q"})
 
-// tilde shortens a path under $HOME to ~/... for display.
-func tilde(p string) string {
-	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home+string(filepath.Separator)) {
-		return "~" + p[len(home):]
+	width := m.width - 2
+	sep := " | "
+	var b strings.Builder
+	length := 0
+	for i, o := range opts {
+		text := o.desc + ": " + o.key
+		if i > 0 && length+len(sep)+lipgloss.Width(text) > width {
+			b.WriteString(m.theme.options.Render(sep + "…"))
+			break
+		}
+		if i > 0 {
+			b.WriteString(m.theme.options.Render(sep))
+			length += len(sep)
+		}
+		b.WriteString(m.theme.options.Render(text))
+		length += lipgloss.Width(text)
 	}
-	return p
+	return b.String()
 }

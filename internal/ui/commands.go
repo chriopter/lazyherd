@@ -37,13 +37,15 @@ type (
 	statusMsg    string
 	refreshMsg   time.Time
 	autoFetchMsg time.Time
+	spinMsg      time.Time
 )
 
 const (
 	refreshEvery   = 3 * time.Second
 	fetchEvery     = 60 * time.Second
 	selectionDelay = 250 * time.Millisecond
-	companionRatio = 0.3 // share of the width the list keeps; lazygit gets the rest
+	spinEvery      = 180 * time.Millisecond // lazygit's spinner rate
+	companionRatio = 0.3                    // share of the width the list keeps; lazygit gets the rest
 )
 
 func refreshTick() tea.Cmd {
@@ -52,6 +54,10 @@ func refreshTick() tea.Cmd {
 
 func fetchTick() tea.Cmd {
 	return tea.Tick(fetchEvery, func(t time.Time) tea.Msg { return autoFetchMsg(t) })
+}
+
+func spinTick() tea.Cmd {
+	return tea.Tick(spinEvery, func(t time.Time) tea.Msg { return spinMsg(t) })
 }
 
 func selectionTick(seq int) tea.Cmd {
