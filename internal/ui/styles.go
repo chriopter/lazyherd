@@ -26,5 +26,5 @@ var (
 	paneStyle         = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorDim).Padding(0, 1)
 	activePaneStyle   = paneStyle.BorderForeground(colorAccent)
 	previewTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
-	sectionStyle      = lipgloss.NewStyle().Bold(true).Foreground(colorDim).MarginTop(1)
+	sectionStyle      = lipgloss.NewStyle().Bold(true).Foreground(colorDim)
 )

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -95,7 +96,7 @@ func TestViewSurvivesTinyTerminal(t *testing.T) {
 func TestStalePreviewIsDropped(t *testing.T) {
 	m := newTestModel(t)
 	m.setRepos([]repo.Repo{{Name: "a"}})
-	next, _ := m.Update(previewMsg{gen: m.gen - 1, name: "a", status: "old"})
+	next, _ := m.Update(previewMsg{gen: m.gen - 1, name: "a", preview: preview{branch: "old"}})
 	if _, ok := next.(Model).previews["a"]; ok {
 		t.Fatal("stale preview cached")
 	}
@@ -177,5 +178,47 @@ func TestCommitDialog(t *testing.T) {
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
 	if next.(Model).committing {
 		t.Fatal("c on a clean repo must not open the dialog")
+	}
+}
+
+func TestFilePaneNavigationAndMouse(t *testing.T) {
+	m := newTestModel(t)
+	m.width, m.height = 120, 30
+	m.setRepos([]repo.Repo{{Name: "a", Changes: 2}, {Name: "b"}})
+	p := preview{changes: []repo.Change{{Path: "x/one.go", Unstaged: 'M', Staged: ' '}, {Path: "two.go", Untracked: true}}}
+	p.rows = buildTree(p.changes)
+	p.files = fileRows(p.rows)
+	m.previews["a"] = p
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m = next.(Model)
+	if m.focus != paneFiles || m.currentFile().Path != "two.go" {
+		t.Fatalf("l should focus the first file, got focus=%v file=%v", m.focus, m.currentFile())
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = next.(Model)
+	if m.currentFile().Path != "x/one.go" {
+		t.Fatalf("j should select the next file, got %v", m.currentFile())
+	}
+	if !strings.Contains(m.View(), "DIFF x/one.go") {
+		t.Fatal("view should show the diff section for the selected file")
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if m.focus != paneRepos {
+		t.Fatal("esc should return to the repo pane")
+	}
+
+	// click on the first tree row (two.go) inside the right pane
+	next, _ = m.Update(tea.MouseMsg{X: m.layout().leftW + 3, Y: treeRowsTop, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = next.(Model)
+	if m.focus != paneFiles || m.currentFile().Path != "two.go" {
+		t.Fatalf("click should select two.go, got focus=%v file=%v", m.focus, m.currentFile())
+	}
+	// click on the second repo row
+	next, _ = m.Update(tea.MouseMsg{X: 2, Y: repoRowsTop + 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = next.(Model)
+	if m.current().Name != "b" || m.focus != paneRepos {
+		t.Fatalf("click should select repo b, got %v", m.current())
 	}
 }

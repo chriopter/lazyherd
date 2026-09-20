@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -53,8 +54,55 @@ func TestScan(t *testing.T) {
 	}
 }
 
+func TestStatusParsesChanges(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	run(t, dir, "init", "-q", "-b", "main", ".")
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644)
+	run(t, dir, "add", "a.txt")
+	run(t, dir, "commit", "-q", "-m", "init")
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aa"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+	os.WriteFile(filepath.Join(dir, "sub", "new.go"), []byte("x"), 0o644)
+	run(t, dir, "add", "sub/new.go")
+
+	branch, changes, err := Status(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if branch != "main" {
+		t.Errorf("branch line: %q", branch)
+	}
+	if len(changes) != 2 || changes[0].Path != "a.txt" || changes[0].Code() != " M" ||
+		changes[1].Path != "sub/new.go" || changes[1].Code() != "A " {
+		t.Errorf("changes: %+v", changes)
+	}
+	if d := Diff(dir, changes[0]); !strings.Contains(d, "aa") {
+		t.Errorf("unstaged diff: %q", d)
+	}
+	if d := Diff(dir, changes[1]); !strings.HasPrefix(stripANSI(d), "@@") {
+		t.Errorf("staged diff: %q", d)
+	}
+}
+
 func TestScanMissingRoot(t *testing.T) {
 	if _, err := Scan(filepath.Join(t.TempDir(), "nope")); err == nil {
 		t.Fatal("want error for missing root")
 	}
+}
+
+func stripANSI(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0x1b {
+			for i < len(s) && s[i] != 'm' {
+				i++
+			}
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }

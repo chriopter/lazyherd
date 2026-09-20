@@ -93,7 +93,7 @@ func isRepo(dir string) bool {
 
 func scanOne(name, dir string) Repo {
 	r := Repo{Name: name}
-	st, err := git(gitTimeout, dir, "status", "--porcelain")
+	st, err := git(gitTimeout, dir, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		r.Err = err
 		return r
@@ -133,19 +133,89 @@ func FetchAll(root string, repos []Repo) []string {
 	return failed
 }
 
-// Preview returns the colored short status and recent log of one repository.
-// A failing git command is reported in place of its output.
-func Preview(dir string, commits int) (status, log string) {
-	status, err := git(gitTimeout, dir, "-c", "color.status=always", "status", "-sb")
-	if err != nil {
-		status = "git status failed: " + err.Error()
+// Change is one entry of git status: a file with its index and worktree state.
+type Change struct {
+	Path      string
+	Staged    byte // X column of git status --porcelain, ' ' when clean
+	Unstaged  byte // Y column
+	Untracked bool
+}
+
+// Code is the two-letter status as git shows it, e.g. "M ", " M", "??".
+func (c Change) Code() string {
+	if c.Untracked {
+		return "??"
 	}
-	log, err = git(gitTimeout, dir, "log", "--color=always", "--date=relative", fmt.Sprintf("-%d", commits),
+	return string([]byte{c.Staged, c.Unstaged})
+}
+
+// Status returns the branch summary line and the changed files of dir.
+func Status(dir string) (branch string, changes []Change, err error) {
+	out, err := git(gitTimeout, dir, "status", "--porcelain=v1", "-b", "--untracked-files=all")
+	if err != nil {
+		return "", nil, err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "## "):
+			branch = strings.TrimPrefix(line, "## ")
+		case len(line) > 3:
+			c := Change{Staged: line[0], Unstaged: line[1], Path: line[3:]}
+			if c.Staged == '?' {
+				c.Untracked = true
+			}
+			if i := strings.Index(c.Path, " -> "); i >= 0 { // rename: keep the new name
+				c.Path = c.Path[i+4:]
+			}
+			changes = append(changes, c)
+		}
+	}
+	return branch, changes, nil
+}
+
+// Log returns the recent history of dir, colored.
+func Log(dir string, commits int) string {
+	out, err := git(gitTimeout, dir, "log", "--color=always", "--date=relative", fmt.Sprintf("-%d", commits),
 		"--pretty=format:%C(yellow)%h%C(reset) %C(dim)%ad%C(reset) %s")
 	if err != nil {
-		log = "git log failed: " + err.Error()
+		return "git log failed: " + err.Error()
 	}
-	return status, log
+	return out
+}
+
+// Diff returns the colored diff of one file: staged and unstaged hunks, or
+// the whole file for an untracked one. The per-file header lines are dropped,
+// the hunks start right away.
+func Diff(dir string, c Change) string {
+	if c.Untracked {
+		// exit status 1 just means "differences found"
+		out, _ := git(gitTimeout, dir, "diff", "--no-index", "--color=always", "--", os.DevNull, c.Path)
+		return stripDiffHeader(out)
+	}
+	var parts []string
+	if c.Staged != ' ' {
+		if out, _ := git(gitTimeout, dir, "diff", "--cached", "--color=always", "--", c.Path); out != "" {
+			parts = append(parts, stripDiffHeader(out))
+		}
+	}
+	if c.Unstaged != ' ' {
+		if out, _ := git(gitTimeout, dir, "diff", "--color=always", "--", c.Path); out != "" {
+			parts = append(parts, stripDiffHeader(out))
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// stripDiffHeader drops everything before the first hunk of a single-file
+// diff, so the pane shows changes instead of "diff --git" boilerplate.
+func stripDiffHeader(diff string) string {
+	lines := strings.Split(diff, "\n")
+	for i, l := range lines {
+		if strings.Contains(l, "@@") {
+			return strings.Join(lines[i:], "\n")
+		}
+	}
+	return diff
 }
 
 // Run executes one git command in dir, for pull, push and single fetches.

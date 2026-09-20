@@ -21,9 +21,14 @@ type (
 		state herdr.State
 	}
 	previewMsg struct {
-		gen         int
-		name        string
-		status, log string
+		gen     int
+		name    string
+		preview preview
+	}
+	diffMsg struct {
+		gen        int
+		name, path string
+		text       string
 	}
 	fetchDoneMsg   struct{ failed []string }
 	lazygitDoneMsg struct{ err error }
@@ -50,8 +55,23 @@ func herdrCmd(gen int, root string) tea.Cmd {
 
 func previewCmd(gen int, root, name string) tea.Cmd {
 	return func() tea.Msg {
-		status, log := repo.Preview(filepath.Join(root, name), previewCommits)
-		return previewMsg{gen: gen, name: name, status: status, log: log}
+		dir := filepath.Join(root, name)
+		p := preview{}
+		var err error
+		p.branch, p.changes, err = repo.Status(dir)
+		if err != nil {
+			p.err = err
+		}
+		p.log = repo.Log(dir, previewCommits)
+		p.rows = buildTree(p.changes)
+		p.files = fileRows(p.rows)
+		return previewMsg{gen: gen, name: name, preview: p}
+	}
+}
+
+func diffCmd(gen int, root, name string, c repo.Change) tea.Cmd {
+	return func() tea.Msg {
+		return diffMsg{gen: gen, name: name, path: c.Path, text: repo.Diff(filepath.Join(root, name), c)}
 	}
 }
 

@@ -14,7 +14,22 @@ import (
 	"github.com/chriopter/lazyherd/internal/repo"
 )
 
-type preview struct{ status, log string }
+// preview is everything the right pane knows about one repository.
+type preview struct {
+	branch  string // "main...origin/main [ahead 1]"
+	changes []repo.Change
+	rows    []treeRow // changes laid out as a tree
+	files   []int     // indices of file rows
+	log     string
+	err     error
+}
+
+type pane int
+
+const (
+	paneRepos pane = iota
+	paneFiles
+)
 
 // Model is the whole application state.
 type Model struct {
@@ -24,9 +39,13 @@ type Model struct {
 	cursor  int   // index into visible
 	herdr   herdr.State
 
+	focus      pane
+	fileCursor int // index into preview.files of the selected repo
+
 	gen      int                 // bumped on every rescan; stale results are dropped
 	previews map[string]preview  // cached by repo name for the current gen
 	pending  map[string]struct{} // previews requested but not yet received
+	diffs    map[string]string   // cached by repo name + path
 
 	width, height int
 	loading       bool
@@ -48,6 +67,7 @@ func New(root string) Model {
 		loading:       true,
 		previews:      map[string]preview{},
 		pending:       map[string]struct{}{},
+		diffs:         map[string]string{},
 		workspaceOnly: os.Getenv("HERDR_WORKSPACE_ID") != "",
 	}
 }
@@ -65,6 +85,7 @@ func (m *Model) rescan() tea.Cmd {
 	m.loading = true
 	m.previews = map[string]preview{}
 	m.pending = map[string]struct{}{}
+	m.diffs = map[string]string{}
 	return m.scanCmds()
 }
 
@@ -76,6 +97,27 @@ func (m Model) current() *repo.Repo {
 }
 
 func (m Model) currentDir() string { return filepath.Join(m.root, m.current().Name) }
+
+// currentPreview is the cached preview of the selected repo, if loaded.
+func (m Model) currentPreview() (preview, bool) {
+	r := m.current()
+	if r == nil {
+		return preview{}, false
+	}
+	p, ok := m.previews[r.Name]
+	return p, ok
+}
+
+// currentFile is the change selected in the file tree, if any.
+func (m Model) currentFile() *repo.Change {
+	p, ok := m.currentPreview()
+	if !ok || m.fileCursor >= len(p.files) {
+		return nil
+	}
+	return p.rows[p.files[m.fileCursor]].change
+}
+
+func diffKey(name, path string) string { return name + "\x00" + path }
 
 // setRepos replaces the repository list and keeps the selection by name.
 func (m *Model) setRepos(repos []repo.Repo) {
@@ -100,10 +142,10 @@ func (m *Model) applyFilter(keep string) {
 		}
 		m.visible = append(m.visible, i)
 	}
-	m.cursor = 0
+	m.selectRepo(0)
 	for i, idx := range m.visible {
 		if m.repos[idx].Name == keep {
-			m.cursor = i
+			m.selectRepo(i)
 		}
 	}
 }
@@ -116,20 +158,41 @@ func (m *Model) refilter() {
 	m.applyFilter(keep)
 }
 
-// loadPreview requests the preview of the selected repo unless cached or pending.
-func (m *Model) loadPreview() tea.Cmd {
+// selectRepo moves the repo cursor and resets the file selection.
+func (m *Model) selectRepo(i int) {
+	if i != m.cursor {
+		m.fileCursor = 0
+	}
+	m.cursor = i
+	if m.currentFile() == nil {
+		m.focus = paneRepos
+	}
+}
+
+// load requests whatever the right pane needs for the current selection.
+func (m *Model) load() tea.Cmd {
 	r := m.current()
 	if r == nil {
 		return nil
 	}
-	if _, ok := m.previews[r.Name]; ok {
-		return nil
+	p, ok := m.previews[r.Name]
+	if !ok {
+		if _, pending := m.pending[r.Name]; pending {
+			return nil
+		}
+		m.pending[r.Name] = struct{}{}
+		return previewCmd(m.gen, m.root, r.Name)
 	}
-	if _, ok := m.pending[r.Name]; ok {
-		return nil
+	if m.fileCursor >= len(p.files) {
+		m.fileCursor = max(len(p.files)-1, 0)
 	}
-	m.pending[r.Name] = struct{}{}
-	return previewCmd(m.gen, m.root, r.Name)
+	if c := m.currentFile(); c != nil {
+		if _, ok := m.diffs[diffKey(r.Name, c.Path)]; !ok {
+			m.diffs[diffKey(r.Name, c.Path)] = "" // requested
+			return diffCmd(m.gen, m.root, r.Name, *c)
+		}
+	}
+	return nil
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -146,7 +209,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "scan failed: " + msg.err.Error()
 		}
 		m.setRepos(msg.repos)
-		return m, m.loadPreview()
+		return m, m.load()
 
 	case herdrMsg:
 		if msg.gen != m.gen {
@@ -158,19 +221,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "herdr not reachable, showing all repos"
 		}
 		m.refilter()
-		return m, m.loadPreview()
+		return m, m.load()
 
 	case previewMsg:
 		if msg.gen != m.gen {
 			return m, nil
 		}
 		delete(m.pending, msg.name)
-		m.previews[msg.name] = preview{status: msg.status, log: msg.log}
+		m.previews[msg.name] = msg.preview
+		return m, m.load()
+
+	case diffMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
+		if msg.text == "" {
+			msg.text = "(no diff)"
+		}
+		m.diffs[diffKey(msg.name, msg.path)] = msg.text
 
 	case fetchDoneMsg:
 		m.fetching = false
 		cmd := m.rescan()
-		if n := len(msg.failed); n > 0 {
+		if len(msg.failed) > 0 {
 			m.status = fmt.Sprintf("fetch failed for %s", strings.Join(msg.failed, ", "))
 		}
 		return m, cmd
@@ -199,6 +272,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusMsg:
 		m.status = string(msg)
 
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
+
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
@@ -209,9 +285,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.committing {
 			return m.updateCommit(msg)
 		}
+		if m.focus == paneFiles {
+			if next, cmd, handled := m.updateFileKeys(msg); handled {
+				return next, cmd
+			}
+		}
 		return m.updateKeys(msg)
 	}
 	return m, nil
+}
+
+func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft || m.committing {
+		return m, nil
+	}
+	l := m.layout()
+	if msg.X < l.leftW {
+		if i, ok := m.repoRowAt(msg.Y); ok {
+			m.selectRepo(i)
+			m.focus = paneRepos
+		}
+		return m, m.load()
+	}
+	if i, ok := m.fileRowAt(msg.Y); ok {
+		m.fileCursor = i
+		m.focus = paneFiles
+	}
+	return m, m.load()
 }
 
 func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -231,7 +331,7 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.refilter()
-	return m, m.loadPreview()
+	return m, m.load()
 }
 
 func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -261,6 +361,27 @@ func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateFileKeys handles navigation inside the file tree; other keys fall
+// through to the global bindings.
+func (m Model) updateFileKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	p, _ := m.currentPreview()
+	switch msg.String() {
+	case "down", "j":
+		m.fileCursor = min(m.fileCursor+1, max(len(p.files)-1, 0))
+	case "up", "k":
+		m.fileCursor = max(m.fileCursor-1, 0)
+	case "g", "home":
+		m.fileCursor = 0
+	case "G", "end":
+		m.fileCursor = max(len(p.files)-1, 0)
+	case "esc", "h", "left", "tab":
+		m.focus = paneRepos
+	default:
+		return m, nil, false
+	}
+	return m, m.load(), true
+}
+
 func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	switch msg.String() {
@@ -273,13 +394,17 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "down", "j":
-		m.cursor = min(m.cursor+1, max(0, len(m.visible)-1))
+		m.selectRepo(min(m.cursor+1, max(0, len(m.visible)-1)))
 	case "up", "k":
-		m.cursor = max(m.cursor-1, 0)
+		m.selectRepo(max(m.cursor-1, 0))
 	case "g", "home":
-		m.cursor = 0
+		m.selectRepo(0)
 	case "G", "end":
-		m.cursor = max(0, len(m.visible)-1)
+		m.selectRepo(max(0, len(m.visible)-1))
+	case "l", "right", "tab":
+		if m.currentFile() != nil {
+			m.focus = paneFiles
+		}
 
 	case "/":
 		m.filtering = true
@@ -300,13 +425,8 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if r := m.current(); r != nil && r.Dirty() && m.busy == "" {
 			m.committing, m.commitMsg = true, ""
 		}
-	case "w":
-		if m.herdr.Workspace != "" && m.herdr.Available {
-			m.workspaceOnly = !m.workspaceOnly
-			m.refilter()
-		}
 
-	case "enter", "l":
+	case "enter":
 		if m.current() != nil {
 			return m, lazygitCmd(m.currentDir())
 		}
@@ -314,7 +434,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "t":
 		return m, m.jumpToHerdr()
 	}
-	return m, m.loadPreview()
+	return m, m.load()
 }
 
 // gitOp starts a git operation in the selected repo unless one is running.

@@ -37,6 +37,7 @@ Short on typing? `alias lh=lazyherd` in your shell rc.
 | Key | Action |
 |-----|--------|
 | `↵` | Open lazygit in the selected repo |
+| `l` | Move into the file tree; `j`/`k` pick a file, `esc` goes back |
 | `c` | Stage everything and commit, asking for a message |
 | `p` | `git pull --ff-only` in the selected repo |
 | `P` | `git push` in the selected repo |
@@ -47,6 +48,10 @@ Short on typing? `alias lh=lazyherd` in your shell rc.
 | `t` | Jump to the repo's [Herdr](https://herdr.dev) tab, or open one |
 | `w` | Toggle between the current Herdr workspace and all repos |
 | `q` | Quit |
+
+The right pane lists the changed files of the selected repo as a tree and
+shows the diff of the picked file, or the recent log when the repo is clean.
+Mouse clicks select repos and files too.
 
 Only the immediate subdirectories of DIR are scanned; symlinked directories
 are skipped. Repos are sorted
