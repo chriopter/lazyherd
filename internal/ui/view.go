@@ -133,7 +133,7 @@ func reflow(text string) string {
 			out = append(out, "")
 		case strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") || strings.HasPrefix(t, "• "):
 			flush()
-			cur = "• " + strings.TrimSpace(t[2:])
+			cur = "- " + strings.TrimSpace(t[2:])
 		case cur == "":
 			cur = t
 		default:

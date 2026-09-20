@@ -17,10 +17,15 @@ const (
 	diffLimit     = 60_000
 
 	commitPrompt = "Write a git commit message for the change below.\n" +
-		"Line 1: the subject, under 72 characters, no quotes, no trailing period.\n" +
-		"Line 2: empty.\n" +
-		"Then a short description: what changed and why, wrapped at 72 characters, " +
-		"plain sentences or a few dash bullets, no headings, no markdown code fences.\n" +
+		"Subject line: a changelog entry in past tense, under 72 characters, " +
+		"starting with a verb such as Added, Fixed, Removed, Changed, Renamed, Moved, " +
+		"naming the concrete thing that changed, e.g. 'Added description field to commit dialog' " +
+		"or 'Fixed crash when scanning empty directories'. " +
+		"No quotes, no trailing period, no prefixes like 'feat:' or 'chore:', " +
+		"no vague words like 'update', 'improve', 'refactor', 'various'.\n" +
+		"Then an empty line, then 1 to 5 dash bullets in the same style, " +
+		"one concrete change each, wrapped at 72 characters. " +
+		"Skip the bullets when the subject already says everything.\n" +
 		"Follow any commit message conventions of this repository. " +
 		"Output only the commit message, nothing else."
 )
