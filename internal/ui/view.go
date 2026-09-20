@@ -69,30 +69,48 @@ func (m Model) commitDialog() string {
 	r := m.current()
 	w := min(max(m.width*70/100, 84), m.width-4) // wide enough for 72-column text
 	inner := w - 4
-	field := lipgloss.NewStyle().Width(inner).Background(colorSelected).Foreground(colorText).Padding(0, 1)
+	active := lipgloss.NewStyle().Width(inner).Background(colorSelected).Foreground(colorText).Padding(0, 1)
+	idle := lipgloss.NewStyle().Width(inner).Foreground(colorText).Padding(0, 1).
+		Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(colorDim)
+	label := func(name string, n int) string {
+		if m.commitField == n {
+			return keyStyle.Render(name)
+		}
+		return headerStyle.Render(name)
+	}
+	style := func(n int) lipgloss.Style {
+		if m.commitField == n {
+			return active
+		}
+		return idle
+	}
 
-	subject := m.commitMsg + "▏"
+	subject, body := m.commitMsg, m.commitBody
 	if m.generating {
-		subject = "⟳ asking claude …"
+		subject, body = "⟳ asking claude …", ""
+	} else if m.commitField == 0 {
+		subject += "▏"
+	} else {
+		body += "▏"
+	}
+	if lines := strings.Split(body, "\n"); len(lines) > 12 {
+		body = "…\n" + strings.Join(lines[len(lines)-12:], "\n")
+	}
+	if body == "" {
+		body = dimStyle.Render("optional")
 	}
 	parts := []string{
 		previewTitleStyle.Render("Commit "+r.Name) + "  " +
 			dimStyle.Render(fmt.Sprintf("%d changes, all will be staged", r.Changes)),
 		"",
-		headerStyle.Render("SUBJECT"),
-		field.Render(subject),
+		label("SUBJECT", 0),
+		style(0).Render(subject),
+		"",
+		label("DESCRIPTION", 1),
+		style(1).Render(body),
+		"",
+		dimStyle.Render("enter commit · tab switch field · ctrl+g write with claude · esc cancel"),
 	}
-	hint := "enter commit · tab generate with claude · esc cancel"
-	if m.commitBody != "" {
-		body := reflow(m.commitBody)
-		if lines := strings.Split(body, "\n"); len(lines) > 12 {
-			body = strings.Join(lines[:12], "\n") + "\n…"
-		}
-		parts = append(parts, "", headerStyle.Render("DESCRIPTION"),
-			lipgloss.NewStyle().Width(inner).Foreground(colorText).Padding(0, 1).Render(body))
-		hint = "enter commit · tab regenerate · ctrl+d drop description · esc cancel"
-	}
-	parts = append(parts, "", dimStyle.Render(hint))
 	return activePaneStyle.Width(w).Render(strings.Join(parts, "\n"))
 }
 
@@ -396,7 +414,11 @@ func (m Model) help() string {
 	k := func(key, desc string) string { return keyStyle.Render(key) + dimStyle.Render(" "+desc) }
 	sep := dimStyle.Render(" · ")
 	if m.committing {
-		return " " + strings.Join([]string{k("↵", "commit"), k("tab", "generate with claude"), k("esc", "cancel")}, sep)
+		commit := k("↵", "commit")
+		if m.commitField == 1 {
+			commit = k("alt+↵", "commit")
+		}
+		return " " + strings.Join([]string{commit, k("tab", "switch field"), k("ctrl+g", "write with claude"), k("esc", "cancel")}, sep)
 	}
 	if m.focus == paneFiles {
 		return " " + strings.Join([]string{k("j/k", "file"), k("esc", "back"), k("↵", "lazygit"), k("c", "commit"), k("q", "quit")}, sep)

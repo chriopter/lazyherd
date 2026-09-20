@@ -14,7 +14,7 @@ in the one you pick. Press Esc to get back from lazygit to the overview.
 - Change tree of the selected repo with git status codes per file.
 - Diff of the selected file, or the recent log when the repo is clean.
 - Enter opens lazygit in the selected repo; on exit the list is rescanned.
-- Commit dialog: stages everything, asks for a subject; Tab lets Claude Code write subject and description.
+- Commit dialog with subject and description; stages everything. Ctrl+G lets Claude Code write both.
 - Pull (`--ff-only`), push, fetch for one repo; fetch for all repos.
 - Name filter.
 - Keyboard and mouse selection.
@@ -53,7 +53,7 @@ lazyherd ~/code     # or any directory of repos
 |-----|--------|
 | `↵` | Open lazygit in the selected repo |
 | `l` | Move into the file tree; `j`/`k` pick a file, `esc` goes back |
-| `c` | Commit dialog: stage all and commit; `tab` generates subject and description with `claude -p`, `ctrl+d` drops the description |
+| `c` | Commit dialog: subject and description, `tab` switches fields, `ctrl+g` writes both with `claude -p`, `enter` commits (`alt+enter` from the description) |
 | `p` | `git pull --ff-only` in the selected repo |
 | `P` | `git push` in the selected repo |
 | `f` | `git fetch --all` in the selected repo |

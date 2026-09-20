@@ -169,6 +169,20 @@ func TestCommitDialog(t *testing.T) {
 	if m.width, m.height = 100, 30; m.View() == "" {
 		t.Fatal("dialog view is empty")
 	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+	for _, r := range "why" {
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.commitBody != "why\n" || !m.committing {
+		t.Fatalf("enter in the description should add a line, got %q committing=%v", m.commitBody, m.committing)
+	}
+	if !strings.Contains(m.View(), "DESCRIPTION") {
+		t.Fatal("description field should always be shown")
+	}
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = next.(Model)
 	if m.committing {

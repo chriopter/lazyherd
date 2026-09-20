@@ -55,7 +55,8 @@ type Model struct {
 	filter        string // current name filter
 	committing    bool   // commit dialog open
 	commitMsg     string // subject typed into the commit dialog
-	commitBody    string // description below the subject, from claude
+	commitBody    string // description below the subject
+	commitField   int    // 0 subject, 1 description
 	generating    bool   // claude is writing a commit message
 	workspaceOnly bool   // only repos with a pane in the current Herdr workspace
 	status        string // transient note in the title bar
@@ -281,7 +282,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.err != nil:
 			m.status = "claude: " + msg.err.Error()
 		case m.committing && m.current() != nil && m.current().Name == msg.name:
-			m.commitMsg, m.commitBody = msg.subject, msg.body
+			m.commitMsg, m.commitBody = msg.subject, reflow(msg.body)
 		}
 
 	case statusMsg:
@@ -349,38 +350,55 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, m.load()
 }
 
+// updateCommit edits the commit dialog: tab switches between subject and
+// description, enter commits from the subject, alt+enter from anywhere.
 func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	field := &m.commitMsg
+	if m.commitField == 1 {
+		field = &m.commitBody
+	}
 	switch msg.String() {
 	case "esc":
-		m.committing, m.commitMsg, m.commitBody = false, "", ""
-	case "ctrl+d":
-		m.commitBody = ""
-	case "tab":
+		m.committing, m.commitMsg, m.commitBody, m.commitField = false, "", "", 0
+	case "tab", "shift+tab", "down", "up":
+		m.commitField = 1 - m.commitField
+	case "ctrl+g":
 		if !m.generating {
 			m.generating = true
 			return m, generateCmd(m.root, m.current().Name)
 		}
 	case "enter":
-		if strings.TrimSpace(m.commitMsg) == "" {
+		if m.commitField == 1 {
+			m.commitBody += "\n"
 			return m, nil
 		}
-		r := m.current()
-		m.committing = false
-		m.busy = "commit " + r.Name
-		subject, body := m.commitMsg, m.commitBody
-		m.commitMsg, m.commitBody = "", ""
-		return m, commitCmd(m.root, r.Name, subject, body)
+		return m.submitCommit()
+	case "alt+enter", "ctrl+s":
+		return m.submitCommit()
 	case "backspace":
-		if m.commitMsg != "" {
-			_, size := utf8.DecodeLastRuneInString(m.commitMsg)
-			m.commitMsg = m.commitMsg[:len(m.commitMsg)-size]
+		if *field != "" {
+			_, size := utf8.DecodeLastRuneInString(*field)
+			*field = (*field)[:len(*field)-size]
 		}
 	default:
 		if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
-			m.commitMsg += string(msg.Runes)
+			*field += string(msg.Runes)
 		}
 	}
 	return m, nil
+}
+
+func (m Model) submitCommit() (tea.Model, tea.Cmd) {
+	if strings.TrimSpace(m.commitMsg) == "" {
+		m.commitField = 0
+		return m, nil
+	}
+	r := m.current()
+	m.committing = false
+	m.busy = "commit " + r.Name
+	subject, body := strings.TrimSpace(m.commitMsg), strings.TrimSpace(m.commitBody)
+	m.commitMsg, m.commitBody, m.commitField = "", "", 0
+	return m, commitCmd(m.root, r.Name, subject, body)
 }
 
 // updateFileKeys handles navigation inside the file tree; other keys fall
@@ -450,7 +468,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "c":
 		if r := m.current(); r != nil && r.Dirty() && m.busy == "" {
-			m.committing, m.commitMsg, m.commitBody = true, "", ""
+			m.committing, m.commitMsg, m.commitBody, m.commitField = true, "", "", 0
 		}
 
 	case "enter":
