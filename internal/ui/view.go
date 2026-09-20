@@ -14,9 +14,9 @@ const (
 	statusPanelH = 3
 	minWidth     = 24
 	minHeight    = 8
-	branchMinW   = 44 // below this width the branch column is dropped
-	ageMinW      = 56 // below this width the last-commit column is dropped
-	ageW         = 4  // "12M "
+	ageMinW      = 36 // below this width the last-commit column is dropped
+	branchMinW   = 52 // below this width the branch column is dropped
+	ageW         = 3  // "12M"
 
 	// Screen row of the first repo line: status panel plus the list's top border.
 	repoRowsTop = statusPanelH + 1
@@ -161,7 +161,8 @@ func (m Model) style(style lipgloss.Style, selected bool) lipgloss.Style {
 // columns splits the free width between the name and branch columns: names
 // get what the longest visible name needs, branches take the rest. Narrow
 // lists drop the branch column.
-// Wide lists also get the age of the last commit, right-aligned before SYNC.
+// The last-commit age comes before the branch: narrow lists drop the branch
+// first, then the age.
 func (m Model) columns(width int) (nameW, branchW int, age bool) {
 	const countW, syncW = 3, 6
 	free := width - 1 - countW - 1 - m.groupWidth() - 1 - syncW
@@ -169,13 +170,13 @@ func (m Model) columns(width int) (nameW, branchW int, age bool) {
 	for _, i := range m.visible {
 		longest = max(longest, len(m.repos[i].Name))
 	}
-	if width < branchMinW {
-		return max(min(longest, free), 6), 0, false
-	}
-	free--
 	if age = width >= ageMinW; age {
 		free -= ageW + 1
 	}
+	if width < branchMinW {
+		return max(min(longest, free), 6), 0, age
+	}
+	free--
 	nameW = max(min(longest, free-8), 8)
 	branchW = max(free-nameW, 8)
 	return nameW, branchW, age
