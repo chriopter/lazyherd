@@ -227,14 +227,27 @@ func TestGeneratedMessageFillsDialog(t *testing.T) {
 	m := newTestModel(t)
 	m.setRepos([]repo.Repo{{Name: "a", Changes: 1}})
 	m.committing, m.generating = true, true
-	next, _ := m.Update(generatedMsg{name: "a", text: "Added thing"})
+	next, _ := m.Update(generatedMsg{name: "a", subject: "Added thing", body: "Because."})
 	m = next.(Model)
-	if m.generating || m.commitMsg != "Added thing" {
-		t.Fatalf("generated message not applied: %+v", m.commitMsg)
+	if m.generating || m.commitMsg != "Added thing" || m.commitBody != "Because." {
+		t.Fatalf("generated message not applied: %q / %q", m.commitMsg, m.commitBody)
+	}
+	if m.width, m.height = 100, 30; !strings.Contains(m.View(), "Because.") {
+		t.Fatal("dialog should show the description")
 	}
 	m.committing = false
-	next, _ = m.Update(generatedMsg{name: "a", text: "late"})
+	next, _ = m.Update(generatedMsg{name: "a", subject: "late"})
 	if next.(Model).commitMsg == "late" {
 		t.Fatal("a late result must not change a closed dialog")
+	}
+}
+
+func TestSplitMessage(t *testing.T) {
+	sub, body := splitMessage("```\n\"Fixed the thing\"\n\nIt was broken because of X.\n- also Y\n```")
+	if sub != "Fixed the thing" || body != "It was broken because of X.\n- also Y" {
+		t.Fatalf("got %q / %q", sub, body)
+	}
+	if sub, body := splitMessage("Only subject"); sub != "Only subject" || body != "" {
+		t.Fatalf("got %q / %q", sub, body)
 	}
 }

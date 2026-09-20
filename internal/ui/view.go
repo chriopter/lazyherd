@@ -72,11 +72,20 @@ func (m Model) commitDialog() string {
 	if m.generating {
 		input = dimStyle.Render("⟳ asking claude …")
 	}
-	body := previewTitleStyle.Render("Commit "+r.Name) + "  " +
+	text := previewTitleStyle.Render("Commit "+r.Name) + "  " +
 		dimStyle.Render(fmt.Sprintf("%d changes, all will be staged", r.Changes)) + "\n\n" +
-		lipgloss.NewStyle().MaxWidth(w-4).Render(input) + "\n\n" +
-		dimStyle.Render("enter commit · tab generate with claude · esc cancel")
-	return activePaneStyle.Width(w).Render(body)
+		lipgloss.NewStyle().MaxWidth(w-4).Render(input) + "\n"
+	hint := "enter commit · tab generate with claude · esc cancel"
+	if m.commitBody != "" {
+		body := m.commitBody
+		if lines := strings.Split(body, "\n"); len(lines) > 12 {
+			body = strings.Join(lines[:12], "\n") + "\n…"
+		}
+		text += "\n" + lipgloss.NewStyle().Width(w-4).Foreground(colorText).Render(body) + "\n"
+		hint = "enter commit · tab regenerate · ctrl+d drop description · esc cancel"
+	}
+	text += "\n" + dimStyle.Render(hint)
+	return activePaneStyle.Width(w).Render(text)
 }
 
 func (m Model) title() string {

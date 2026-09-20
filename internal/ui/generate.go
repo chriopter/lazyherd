@@ -16,15 +16,20 @@ const (
 	claudeTimeout = 2 * time.Minute
 	diffLimit     = 60_000
 
-	commitPrompt = "Write a git commit message for the change below. One short line, " +
-		"under 72 characters, no quotes, no trailing period, no explanation. " +
-		"Follow any commit message conventions of this repository. Output only the message."
+	commitPrompt = "Write a git commit message for the change below.\n" +
+		"Line 1: the subject, under 72 characters, no quotes, no trailing period.\n" +
+		"Line 2: empty.\n" +
+		"Then a short description: what changed and why, wrapped at 72 characters, " +
+		"plain sentences or a few dash bullets, no headings, no markdown code fences.\n" +
+		"Follow any commit message conventions of this repository. " +
+		"Output only the commit message, nothing else."
 )
 
 type generatedMsg struct {
-	name string
-	text string
-	err  error
+	name    string
+	subject string
+	body    string
+	err     error
 }
 
 // generateCmd asks Claude Code (claude -p) for a commit message. It runs in
@@ -44,14 +49,22 @@ func generateCmd(root, name string) tea.Cmd {
 		if err != nil {
 			return generatedMsg{name: name, err: err}
 		}
-		text := strings.TrimSpace(string(out))
-		if i := strings.IndexByte(text, '\n'); i >= 0 {
-			text = text[:i] // keep the first line only
-		}
-		text = strings.Trim(text, "\"'`")
-		if text == "" {
+		subject, body := splitMessage(string(out))
+		if subject == "" {
 			return generatedMsg{name: name, err: errors.New("claude returned nothing")}
 		}
-		return generatedMsg{name: name, text: text}
+		return generatedMsg{name: name, subject: subject, body: body}
 	}
+}
+
+// splitMessage separates a commit message into subject and body and strips
+// quoting or code fences a model may wrap it in.
+func splitMessage(text string) (subject, body string) {
+	text = strings.TrimSpace(text)
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	text = strings.TrimSpace(text)
+	subject, body, _ = strings.Cut(text, "\n")
+	subject = strings.Trim(strings.TrimSpace(subject), "\"'`")
+	return subject, strings.TrimSpace(body)
 }

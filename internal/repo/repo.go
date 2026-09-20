@@ -224,12 +224,17 @@ func Run(dir string, args ...string) error {
 	return err
 }
 
-// Commit stages everything in dir and commits it with the given message.
-func Commit(dir, message string) error {
+// Commit stages everything in dir and commits it with subject and, when not
+// empty, a body paragraph.
+func Commit(dir, subject, body string) error {
 	if _, err := git(gitTimeout, dir, "add", "-A"); err != nil {
 		return err
 	}
-	_, err := git(fetchTimeout, dir, "commit", "-q", "-m", message)
+	args := []string{"commit", "-q", "-m", subject}
+	if body != "" {
+		args = append(args, "-m", body)
+	}
+	_, err := git(fetchTimeout, dir, args...)
 	return err
 }
 

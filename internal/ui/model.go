@@ -54,7 +54,8 @@ type Model struct {
 	filtering     bool   // typing into the name filter
 	filter        string // current name filter
 	committing    bool   // commit dialog open
-	commitMsg     string // message typed into the commit dialog
+	commitMsg     string // subject typed into the commit dialog
+	commitBody    string // description below the subject, from claude
 	generating    bool   // claude is writing a commit message
 	workspaceOnly bool   // only repos with a pane in the current Herdr workspace
 	status        string // transient note in the title bar
@@ -276,7 +277,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.err != nil:
 			m.status = "claude: " + msg.err.Error()
 		case m.committing && m.current() != nil && m.current().Name == msg.name:
-			m.commitMsg = msg.text
+			m.commitMsg, m.commitBody = msg.subject, msg.body
 		}
 
 	case statusMsg:
@@ -347,7 +348,9 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.committing, m.commitMsg = false, ""
+		m.committing, m.commitMsg, m.commitBody = false, "", ""
+	case "ctrl+d":
+		m.commitBody = ""
 	case "tab":
 		if !m.generating {
 			m.generating = true
@@ -360,9 +363,9 @@ func (m Model) updateCommit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		r := m.current()
 		m.committing = false
 		m.busy = "commit " + r.Name
-		message := m.commitMsg
-		m.commitMsg = ""
-		return m, commitCmd(m.root, r.Name, message)
+		subject, body := m.commitMsg, m.commitBody
+		m.commitMsg, m.commitBody = "", ""
+		return m, commitCmd(m.root, r.Name, subject, body)
 	case "backspace":
 		if m.commitMsg != "" {
 			_, size := utf8.DecodeLastRuneInString(m.commitMsg)
@@ -438,7 +441,7 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.gitOp("push", "push", "--quiet")
 	case "c":
 		if r := m.current(); r != nil && r.Dirty() && m.busy == "" {
-			m.committing, m.commitMsg = true, ""
+			m.committing, m.commitMsg, m.commitBody = true, "", ""
 		}
 
 	case "enter":

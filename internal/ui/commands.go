@@ -86,9 +86,9 @@ func gitOpCmd(op, root, name string, args ...string) tea.Cmd {
 	}
 }
 
-func commitCmd(root, name, message string) tea.Cmd {
+func commitCmd(root, name, subject, body string) tea.Cmd {
 	return func() tea.Msg {
-		return opDoneMsg{op: "commit", name: name, err: repo.Commit(filepath.Join(root, name), message)}
+		return opDoneMsg{op: "commit", name: name, err: repo.Commit(filepath.Join(root, name), subject, body)}
 	}
 }
 
