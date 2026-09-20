@@ -203,15 +203,39 @@ func CreateTab(workspace, dir, label string) error {
 // OpenCockpit brings the workspace's cockpit pane to the front, opening the
 // plugin's pane entrypoint when there is none yet. Herdr labels a plugin pane
 // with its manifest title, which is how an existing one is recognised.
+//
+// The cockpit is opened unfocused and its tab focused afterwards with an
+// explicit tab focus: a focus that comes with the open, or a plugin pane
+// focus alone, is not drawn by the Herdr client when the action was started
+// from a key binding.
 func OpenCockpit(plugin, entrypoint, label, workspace string) error {
 	panes, err := listPanes()
 	if err != nil {
 		return err
 	}
+	var cockpit Pane
 	for _, p := range panes {
 		if p.WorkspaceID == workspace && p.Label == label {
-			return do("plugin", "pane", "focus", p.ID)
+			cockpit = p
+			break
 		}
 	}
-	return do("plugin", "pane", "open", "--plugin", plugin, "--entrypoint", entrypoint, "--workspace", workspace, "--focus")
+	if cockpit.ID == "" {
+		var result struct {
+			PluginPane struct {
+				Pane Pane `json:"pane"`
+			} `json:"plugin_pane"`
+		}
+		if err := call(&result, "plugin", "pane", "open", "--plugin", plugin, "--entrypoint", entrypoint, "--workspace", workspace, "--no-focus"); err != nil {
+			return err
+		}
+		cockpit = result.PluginPane.Pane
+		if cockpit.ID == "" {
+			return errors.New("herdr: plugin pane open returned no pane")
+		}
+	}
+	if err := FocusTab(cockpit.TabID); err != nil {
+		return err
+	}
+	return do("plugin", "pane", "focus", cockpit.ID)
 }

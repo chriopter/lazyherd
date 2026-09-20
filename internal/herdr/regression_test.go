@@ -175,6 +175,8 @@ func TestFollowSocketCloseAndSIGTERM(t *testing.T) {
 			}
 			scriptOnPath(t, "lazygit", body+"exec sleep 30\n")
 			scriptOnPath(t, "stty", "exit 0\n")
+			scriptOnPath(t, "herdr", `echo "$*" >> "$FOLLOW_LOG"`)
+			t.Setenv("HERDR_PANE_ID", "own")
 			done := startFollower(t, socket)
 			conn, err := dial(socket, 3*time.Second)
 			if err != nil {
@@ -201,6 +203,7 @@ func TestFollowSocketCloseAndSIGTERM(t *testing.T) {
 			if _, err := os.Stat(socket); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("socket remains: %v", err)
 			}
+			awaitFile(t, log, "pane close own\n")
 		})
 	}
 }

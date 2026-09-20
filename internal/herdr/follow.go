@@ -15,10 +15,13 @@ import (
 	"time"
 )
 
-// resetTerminal repairs the terminal when lazygit cannot clean up after itself.
-const resetTerminal = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[?25h\x1b[0m"
+// resetTerminal repairs the terminal when lazygit cannot clean up after
+// itself: mouse, focus and in-band resize reports off, main screen, cursor on.
+const resetTerminal = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2048l\x1b[?1049l\x1b[?25h\x1b[0m"
 
-// Follow listens for repository paths and keeps lazygit open for the latest one.
+// Follow listens for repository paths and keeps lazygit open for the latest
+// one. When the cockpit goes away, so does the pane this runs in: it was
+// split off for lazygit alone, and a bare shell there would only linger.
 func Follow(socket string) error {
 	_ = os.Remove(socket)
 	listener, err := net.Listen("unix", socket)
@@ -27,6 +30,9 @@ func Follow(socket string) error {
 	}
 	defer listener.Close()
 	defer os.Remove(socket)
+	if pane := os.Getenv("HERDR_PANE_ID"); pane != "" {
+		defer func() { _ = ClosePane(pane) }()
+	}
 
 	fmt.Println("lazyherd: waiting for a selection …")
 	conn, err := listener.Accept()
