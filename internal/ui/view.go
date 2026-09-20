@@ -445,7 +445,11 @@ func (m Model) help() string {
 		keys = append(keys, k("t", "herdr"))
 	}
 	if m.herdr.Workspace != "" && m.herdr.Available {
-		keys = append(keys, k("w", "workspace"))
+		if m.workspaceOnly {
+			keys = append(keys, k("w", "show all repos"))
+		} else {
+			keys = append(keys, k("w", "workspace only"))
+		}
 	}
 	keys = append(keys, k("q", "quit"))
 	return " " + strings.Join(keys, sep)
