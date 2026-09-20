@@ -292,6 +292,11 @@ func TestRunReportsHerdrStderr(t *testing.T) {
 	if err == nil || err.Error() != "herdr pane split: error: unknown flag --no-focus" {
 		t.Fatalf("stderr not surfaced: %v", err)
 	}
+	scriptOnPath(t, "herdr", `echo '{"id":"cli:pane:split","error":{"code":"protocol_mismatch","message":"client protocol 20 is older than server protocol 22"}}' >&2; exit 1`)
+	_, err = splitRight("own", t.TempDir(), 0.3)
+	if err == nil || err.Error() != "herdr pane split: client protocol 20 is older than server protocol 22" {
+		t.Fatalf("JSON error not unwrapped: %v", err)
+	}
 	scriptOnPath(t, "herdr", `exit 1`)
 	if err := runInPane("own", "true"); err == nil || err.Error() != "herdr pane run: exit status 1" {
 		t.Fatalf("silent failure: %v", err)

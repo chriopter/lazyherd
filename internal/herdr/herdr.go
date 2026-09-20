@@ -54,9 +54,20 @@ func run(args ...string) ([]byte, error) {
 	return out, err
 }
 
+// lastLine returns the last stderr line, unwrapping herdr's JSON error
+// envelope ({"error":{"message":…}}) to its message when that is what it is.
 func lastLine(b []byte) string {
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	return strings.TrimSpace(lines[len(lines)-1])
+	line := strings.TrimSpace(lines[len(lines)-1])
+	var envelope struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(line), &envelope) == nil && envelope.Error.Message != "" {
+		return envelope.Error.Message
+	}
+	return line
 }
 
 func do(args ...string) error {
