@@ -21,8 +21,9 @@ With Go:
 go install github.com/chriopter/lazyherd@latest
 ```
 
-Or grab a binary from the [releases](https://github.com/chriopter/lazyherd/releases).
-lazygit must be on your `PATH`.
+Or grab a Linux or macOS binary from the
+[releases](https://github.com/chriopter/lazyherd/releases). Building from
+source needs Go 1.24 or newer. `git` and `lazygit` must be on your `PATH`.
 
 ## Use
 
@@ -41,7 +42,10 @@ lazyherd ~/code     # or any directory of repos
 | `w` | Toggle between the current Herdr workspace and all repos |
 | `q` | Quit |
 
-Repos are sorted dirty first, then out of sync, then by name.
+Only the immediate subdirectories of DIR are scanned. Repos are sorted
+dirty first, then out of sync, then by name. Ahead/behind counts come from
+the local tracking refs, so they are only as fresh as the last fetch; `f`
+fetches every listed repo, including the ones hidden by a filter.
 
 To make `Esc` leave lazygit and return to the cockpit, add to
 `~/.config/lazygit/config.yml`:
@@ -55,7 +59,18 @@ quitOnTopLevelReturn: true
 Started inside a Herdr pane, lazyherd shows only the repos that have a pane
 in the current workspace. `w` switches to all repos, `t` focuses the tab that
 already works in the selected repo or creates one. Without Herdr both keys
-simply do nothing.
+are hidden and everything else works as usual.
+
+## Development
+
+```sh
+make test    # go test ./...
+make lint    # gofmt and go vet
+make build   # ./lazyherd
+```
+
+Releases are cut by pushing a `v*` tag; GitHub Actions runs the tests and
+goreleaser publishes the binaries.
 
 ## License
 
