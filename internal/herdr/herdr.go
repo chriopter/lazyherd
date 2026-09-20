@@ -98,6 +98,18 @@ func (s State) Pane(repo, workspace string) *Pane {
 	return nil
 }
 
+// HasRepos reports whether any pane of the workspace sits inside a repo.
+func (s State) HasRepos(workspace string) bool {
+	for _, ps := range s.panes {
+		for _, p := range ps {
+			if workspace == "" || p.WorkspaceID == workspace {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // WorkspaceLabel is the display name of the current workspace.
 func (s State) WorkspaceLabel() string {
 	if l := s.labels[s.Workspace]; l != "" {

@@ -218,9 +218,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.herdr = msg.state
-		if m.workspaceOnly && !m.herdr.Available {
+		switch {
+		case m.workspaceOnly && !m.herdr.Available:
 			m.workspaceOnly = false
 			m.status = "herdr not reachable, showing all repos"
+		case m.workspaceOnly && !m.herdr.HasRepos(m.herdr.Workspace):
+			m.workspaceOnly = false
+			m.status = "no repos open in workspace " + m.herdr.WorkspaceLabel() + ", showing all"
 		}
 		m.refilter()
 		return m, m.load()

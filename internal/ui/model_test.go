@@ -251,3 +251,11 @@ func TestSplitMessage(t *testing.T) {
 		t.Fatalf("got %q / %q", sub, body)
 	}
 }
+
+func TestReflow(t *testing.T) {
+	in := "Swap the README (fork notice,\ndev commands) for a minimal\nHello World.\n\n- first bullet\n  continued\n- second"
+	want := "Swap the README (fork notice, dev commands) for a minimal Hello World.\n\n• first bullet continued\n• second"
+	if got := reflow(in); got != want {
+		t.Fatalf("got %q", got)
+	}
+}

@@ -64,28 +64,66 @@ func (m Model) View() string {
 	return line.Render(m.title()) + "\n" + body + "\n" + line.Render(m.help())
 }
 
-// commitDialog is the small box asking for a commit message.
+// commitDialog is the box asking for a commit subject and description.
 func (m Model) commitDialog() string {
 	r := m.current()
-	w := min(max(m.width*60/100, 50), m.width-4)
-	input := m.commitMsg + "▏"
+	w := min(max(m.width*70/100, 84), m.width-4) // wide enough for 72-column text
+	inner := w - 4
+	field := lipgloss.NewStyle().Width(inner).Background(colorSelected).Foreground(colorText).Padding(0, 1)
+
+	subject := m.commitMsg + "▏"
 	if m.generating {
-		input = dimStyle.Render("⟳ asking claude …")
+		subject = "⟳ asking claude …"
 	}
-	text := previewTitleStyle.Render("Commit "+r.Name) + "  " +
-		dimStyle.Render(fmt.Sprintf("%d changes, all will be staged", r.Changes)) + "\n\n" +
-		lipgloss.NewStyle().MaxWidth(w-4).Render(input) + "\n"
+	parts := []string{
+		previewTitleStyle.Render("Commit "+r.Name) + "  " +
+			dimStyle.Render(fmt.Sprintf("%d changes, all will be staged", r.Changes)),
+		"",
+		headerStyle.Render("SUBJECT"),
+		field.Render(subject),
+	}
 	hint := "enter commit · tab generate with claude · esc cancel"
 	if m.commitBody != "" {
-		body := m.commitBody
+		body := reflow(m.commitBody)
 		if lines := strings.Split(body, "\n"); len(lines) > 12 {
 			body = strings.Join(lines[:12], "\n") + "\n…"
 		}
-		text += "\n" + lipgloss.NewStyle().Width(w-4).Foreground(colorText).Render(body) + "\n"
+		parts = append(parts, "", headerStyle.Render("DESCRIPTION"),
+			lipgloss.NewStyle().Width(inner).Foreground(colorText).Padding(0, 1).Render(body))
 		hint = "enter commit · tab regenerate · ctrl+d drop description · esc cancel"
 	}
-	text += "\n" + dimStyle.Render(hint)
-	return activePaneStyle.Width(w).Render(text)
+	parts = append(parts, "", dimStyle.Render(hint))
+	return activePaneStyle.Width(w).Render(strings.Join(parts, "\n"))
+}
+
+// reflow joins hard-wrapped lines of each paragraph so the text can be
+// wrapped to the dialog width; bullets stay on their own lines.
+func reflow(text string) string {
+	var out []string
+	cur := ""
+	flush := func() {
+		if cur != "" {
+			out = append(out, cur)
+			cur = ""
+		}
+	}
+	for _, line := range strings.Split(text, "\n") {
+		t := strings.TrimSpace(line)
+		switch {
+		case t == "":
+			flush()
+			out = append(out, "")
+		case strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") || strings.HasPrefix(t, "• "):
+			flush()
+			cur = "• " + strings.TrimSpace(t[2:])
+		case cur == "":
+			cur = t
+		default:
+			cur += " " + t
+		}
+	}
+	flush()
+	return strings.Join(out, "\n")
 }
 
 func (m Model) title() string {
