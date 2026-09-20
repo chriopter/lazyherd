@@ -2,8 +2,6 @@ package ui
 
 import (
 	"github.com/charmbracelet/lipgloss"
-
-	"github.com/chriopter/lazyherd/internal/lazygit"
 )
 
 // theme is lazyherd's look, derived from the user's lazygit configuration so
@@ -11,7 +9,7 @@ import (
 // configured others.
 type theme struct {
 	frame           [6]rune
-	icons           *lazygit.Icons
+	icons           *icons
 	activeBorder    lipgloss.Style
 	inactiveBorder  lipgloss.Style
 	searchingBorder lipgloss.Style
@@ -21,18 +19,18 @@ type theme struct {
 	text            lipgloss.Style
 }
 
-func newTheme(cfg lazygit.Config) theme {
+func newTheme(cfg lazygitConfig) theme {
 	t := cfg.Gui.Theme
 	return theme{
-		frame:           lazygit.FrameRunes(cfg.Gui.Border),
-		icons:           lazygit.IconsFor(cfg.Gui.NerdFontsVersion),
-		activeBorder:    lazygit.Style(t.ActiveBorderColor, false),
-		inactiveBorder:  lazygit.Style(t.InactiveBorderColor, false),
-		searchingBorder: lazygit.Style(t.SearchingActiveBorderColor, false),
-		options:         lazygit.Style(t.OptionsTextColor, false),
-		selectedBg:      lazygit.Style(t.SelectedLineBgColor, true),
-		unstaged:        lazygit.Style(t.UnstagedChangesColor, false),
-		text:            lazygit.Style(t.DefaultFgColor, false),
+		frame:           frameRunes(cfg.Gui.Border),
+		icons:           configIcons(cfg.Gui.NerdFontsVersion),
+		activeBorder:    configStyle(t.ActiveBorderColor, false),
+		inactiveBorder:  configStyle(t.InactiveBorderColor, false),
+		searchingBorder: configStyle(t.SearchingActiveBorderColor, false),
+		options:         configStyle(t.OptionsTextColor, false),
+		selectedBg:      configStyle(t.SelectedLineBgColor, true),
+		unstaged:        configStyle(t.UnstagedChangesColor, false),
+		text:            configStyle(t.DefaultFgColor, false),
 	}
 }
 

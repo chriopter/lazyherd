@@ -46,9 +46,6 @@ func TestLoadMapsPanesToRepos(t *testing.T) {
 	if p := st.Pane("web", ""); p == nil || p.TabID != "t2" {
 		t.Errorf("web pane in any workspace: got %+v", p)
 	}
-	if !st.HasRepos("w1") || !st.HasRepos("w2") || st.HasRepos("w9") {
-		t.Error("HasRepos wrong")
-	}
 	if got := st.WorkspaceLabel(); got != "backend" {
 		t.Errorf("workspace label: got %q", got)
 	}

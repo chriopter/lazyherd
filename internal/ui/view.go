@@ -116,46 +116,43 @@ func (m Model) reposPanel(height int) string {
 
 // syncState renders the branch status the way lazygit's BranchStatus does.
 func (m Model) syncState(r repo.Repo, selected bool) string {
-	st := m.highlight(selected)
 	switch {
 	case r.Err != nil:
-		return st(red).Render("!")
+		return m.style(red, selected).Render("!")
 	case r.NoUpstream:
 		return ""
 	case r.Ahead == 0 && r.Behind == 0:
-		return st(green).Render("✓")
+		return m.style(green, selected).Render("✓")
 	case r.Ahead > 0 && r.Behind > 0:
-		return st(yellow).Render(fmt.Sprintf("↓%d↑%d", r.Behind, r.Ahead))
+		return m.style(yellow, selected).Render(fmt.Sprintf("↓%d↑%d", r.Behind, r.Ahead))
 	case r.Behind > 0:
-		return st(yellow).Render(fmt.Sprintf("↓%d", r.Behind))
+		return m.style(yellow, selected).Render(fmt.Sprintf("↓%d", r.Behind))
 	default:
-		return st(yellow).Render(fmt.Sprintf("↑%d", r.Ahead))
+		return m.style(yellow, selected).Render(fmt.Sprintf("↑%d", r.Ahead))
 	}
 }
 
-// branchName renders the branch with lazygit's icon when icons are on.
-func (m Model) branchName(r repo.Repo, selected bool) string {
-	st := m.highlight(selected)
+func (m Model) branch(r repo.Repo) string {
 	name := r.Branch
 	if m.theme.icons != nil {
-		icon := m.theme.icons.Branch
+		icon := m.theme.icons.branch
 		if strings.HasPrefix(name, "@") {
-			icon = m.theme.icons.DetachedHead
+			icon = m.theme.icons.detachedHead
 		}
 		name = icon + " " + name
 	}
-	return st(m.theme.text).Render(name)
+	return name
 }
 
-// highlight returns a style modifier that adds lazygit's selected-line
-// background while keeping each segment's own foreground.
-func (m Model) highlight(selected bool) func(lipgloss.Style) lipgloss.Style {
-	return func(s lipgloss.Style) lipgloss.Style {
-		if selected {
-			return s.Inherit(m.theme.selectedBg).Bold(true)
-		}
-		return s
+func (m Model) branchName(r repo.Repo, selected bool) string {
+	return m.style(m.theme.text, selected).Render(m.branch(r))
+}
+
+func (m Model) style(style lipgloss.Style, selected bool) lipgloss.Style {
+	if selected {
+		return style.Inherit(m.theme.selectedBg).Bold(true)
 	}
+	return style
 }
 
 // columns splits the free width between the name and branch columns: names
@@ -219,8 +216,9 @@ func (m Model) rows(width int) []string {
 }
 
 func (m Model) row(r repo.Repo, selected bool, nameW, branchW, width int) string {
-	st := m.highlight(selected)
-	sp := func(n int) string { return st(lipgloss.NewStyle()).Render(strings.Repeat(" ", n)) }
+	sp := func(n int) string {
+		return m.style(lipgloss.NewStyle(), selected).Render(strings.Repeat(" ", n))
+	}
 
 	// Change count in lazygit's unstaged color, staged-only changes in green.
 	count := sp(3)
@@ -232,25 +230,25 @@ func (m Model) row(r repo.Repo, selected bool, nameW, branchW, width int) string
 				break
 			}
 		}
-		count = st(style).Render(fmt.Sprintf("%3d", len(r.Changes)))
+		count = m.style(style, selected).Render(fmt.Sprintf("%3d", len(r.Changes)))
 	}
 	group := ""
 	if gw := m.groupWidth(); gw > 0 {
 		group = sp(gw)
 		switch {
 		case m.pinned(r.Name):
-			group = st(yellow).Render("★") + sp(gw-1)
+			group = m.style(yellow, selected).Render("★") + sp(gw-1)
 		case m.inWorkspace(r.Name):
-			group = st(cyan).Render("⌂") + sp(gw-1)
+			group = m.style(cyan, selected).Render("⌂") + sp(gw-1)
 		}
 	}
-	line := sp(1) + count + sp(1) + group + st(m.theme.text).Render(fmt.Sprintf("%-*.*s", nameW, nameW, r.Name))
+	line := sp(1) + count + sp(1) + group + m.style(m.theme.text, selected).Render(fmt.Sprintf("%-*.*s", nameW, nameW, r.Name))
 	if branchW > 0 {
 		branch := r.Branch
 		if m.theme.icons != nil {
-			branch = m.theme.icons.Branch + " " + branch
+			branch = m.theme.icons.branch + " " + branch
 		}
-		line += sp(1) + st(m.theme.text).Render(fmt.Sprintf("%-*.*s", branchW, branchW, branch))
+		line += sp(1) + m.style(m.theme.text, selected).Render(fmt.Sprintf("%-*.*s", branchW, branchW, branch))
 	}
 	line += sp(1) + m.syncState(r, selected)
 	if selected {

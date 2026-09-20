@@ -13,10 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/chriopter/lazyherd/internal/follow"
 	"github.com/chriopter/lazyherd/internal/herdr"
-	"github.com/chriopter/lazyherd/internal/lazygit"
-	"github.com/chriopter/lazyherd/internal/pins"
 	"github.com/chriopter/lazyherd/internal/repo"
 )
 
@@ -27,7 +24,7 @@ type Model struct {
 	visible []int // indices into repos that pass the filters
 	cursor  int   // index into visible
 	herdr   herdr.State
-	pins    *pins.Store
+	pins    *pins
 
 	ownPane       string         // HERDR_PANE_ID when running inside Herdr
 	companionPane string         // Herdr pane running the follower, "" without one
@@ -54,20 +51,19 @@ type Model struct {
 // New creates the model for a directory of repositories, styled after the
 // user's lazygit configuration.
 func New(root, version string) Model {
-	m := NewWithPins(root, pins.Path())
+	m := newModel(root, pinsPath())
 	m.version = version
-	m.theme = newTheme(lazygit.Load(lazygit.Path()))
+	m.theme = newTheme(loadConfig(lazygitConfigPath()))
 	return m
 }
 
-// NewWithPins builds a model with an explicit pin file and default theme, for tests.
-func NewWithPins(root, pinPath string) Model {
-	store, err := pins.Load(pinPath)
+func newModel(root, pinPath string) Model {
+	store, err := loadPins(pinPath)
 	m := Model{
 		root:    root,
 		pins:    store,
 		ownPane: os.Getenv("HERDR_PANE_ID"),
-		theme:   newTheme(lazygit.Default()),
+		theme:   newTheme(defaultConfig()),
 		version: "dev",
 		gen:     1,
 		loading: true,
@@ -124,7 +120,7 @@ func (m Model) inWorkspace(name string) bool {
 
 // pinned reports whether the user pinned a repo to the current workspace.
 func (m Model) pinned(name string) bool {
-	return m.pins != nil && m.pins.Pinned(m.herdr.WorkspaceLabel(), name)
+	return m.pins.has(m.herdr.WorkspaceLabel(), name)
 }
 
 // setRepos replaces the repository list and keeps the selection by name.
@@ -187,7 +183,7 @@ func (m *Model) showCurrent() {
 	if m.companion == nil || r == nil || r.Name == m.shown {
 		return
 	}
-	if err := follow.Send(m.companion, m.currentDir()); err != nil {
+	if err := herdr.SendSelection(m.companion, m.currentDir()); err != nil {
 		m.status = "companion: " + err.Error()
 		m.companion = nil
 		return
@@ -386,8 +382,8 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.refilter()
 		}
 	case " ":
-		if r := m.current(); r != nil && m.herdr.Workspace != "" && m.pins != nil {
-			if err := m.pins.Toggle(m.herdr.WorkspaceLabel(), r.Name); err != nil {
+		if r := m.current(); r != nil && m.herdr.Workspace != "" {
+			if err := m.pins.toggle(m.herdr.WorkspaceLabel(), r.Name); err != nil {
 				m.status = "pins: " + err.Error()
 			}
 			m.refilter()

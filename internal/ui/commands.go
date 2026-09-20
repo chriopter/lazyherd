@@ -2,13 +2,11 @@ package ui
 
 import (
 	"net"
-	"os"
-	"path/filepath"
+	"os/exec"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/chriopter/lazyherd/internal/follow"
 	"github.com/chriopter/lazyherd/internal/herdr"
 	"github.com/chriopter/lazyherd/internal/repo"
 )
@@ -35,9 +33,9 @@ type (
 	}
 	selectionMsg int // debounced selection, carries the sequence number
 	statusMsg    string
-	refreshMsg   time.Time
-	autoFetchMsg time.Time
-	spinMsg      time.Time
+	refreshMsg   struct{}
+	autoFetchMsg struct{}
+	spinMsg      struct{}
 )
 
 const (
@@ -49,19 +47,23 @@ const (
 )
 
 func refreshTick() tea.Cmd {
-	return tea.Tick(refreshEvery, func(t time.Time) tea.Msg { return refreshMsg(t) })
+	return tick(refreshEvery, refreshMsg{})
 }
 
 func fetchTick() tea.Cmd {
-	return tea.Tick(fetchEvery, func(t time.Time) tea.Msg { return autoFetchMsg(t) })
+	return tick(fetchEvery, autoFetchMsg{})
 }
 
 func spinTick() tea.Cmd {
-	return tea.Tick(spinEvery, func(t time.Time) tea.Msg { return spinMsg(t) })
+	return tick(spinEvery, spinMsg{})
 }
 
 func selectionTick(seq int) tea.Cmd {
-	return tea.Tick(selectionDelay, func(time.Time) tea.Msg { return selectionMsg(seq) })
+	return tick(selectionDelay, selectionMsg(seq))
+}
+
+func tick(delay time.Duration, msg tea.Msg) tea.Cmd {
+	return tea.Tick(delay, func(time.Time) tea.Msg { return msg })
 }
 
 func scanCmd(gen int, root string) tea.Cmd {
@@ -84,40 +86,16 @@ func syncCmd(root string, repos []repo.Repo) tea.Cmd {
 }
 
 func lazygitCmd(dir string) tea.Cmd {
-	return tea.ExecProcess(repo.Lazygit(dir), func(err error) tea.Msg { return lazygitDoneMsg{err: err} })
+	return tea.ExecProcess(exec.Command("lazygit", "-p", dir), func(err error) tea.Msg { return lazygitDoneMsg{err: err} })
 }
 
 // companionCmd splits a pane to the right of ours in Herdr and starts the
 // follower there, then connects to it.
 func companionCmd(root, ownPane string) tea.Cmd {
 	return func() tea.Msg {
-		exe, err := os.Executable()
-		if err != nil {
-			return companionMsg{err: err}
-		}
-		pane, err := herdr.SplitRight(ownPane, root, companionRatio)
-		if err != nil {
-			return companionMsg{err: err}
-		}
-		socket := filepath.Join(socketDir(), "lazyherd-"+ownPane+".sock")
-		if err := herdr.Run(pane, exe+" follow "+socket); err != nil {
-			_ = herdr.ClosePane(pane)
-			return companionMsg{err: err}
-		}
-		conn, err := follow.Dial(socket, 10*time.Second)
-		if err != nil {
-			_ = herdr.ClosePane(pane)
-			return companionMsg{err: err}
-		}
-		return companionMsg{pane: pane, conn: conn}
+		pane, conn, err := herdr.StartCompanion(root, ownPane, companionRatio)
+		return companionMsg{pane: pane, conn: conn, err: err}
 	}
-}
-
-func socketDir() string {
-	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
-		return d
-	}
-	return os.TempDir()
 }
 
 func focusTabCmd(tabID, name string) tea.Cmd {

@@ -153,6 +153,3 @@ func SyncAll(root string, repos []Repo) []SyncResult {
 	parallel(repos, func(i int, r Repo) { results[i] = Sync(root, r) })
 	return results
 }
-
-// Lazygit returns the command that opens lazygit in dir.
-func Lazygit(dir string) *exec.Cmd { return exec.Command("lazygit", "-p", dir) }

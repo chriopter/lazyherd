@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -18,7 +17,7 @@ func newTestModel(t *testing.T) Model {
 	t.Helper()
 	t.Setenv("HERDR_WORKSPACE_ID", "")
 	t.Setenv("HERDR_PANE_ID", "")
-	return NewWithPins(t.TempDir(), filepath.Join(t.TempDir(), "pins.json"))
+	return newModel(t.TempDir(), filepath.Join(t.TempDir(), "pins.json"))
 }
 
 // run drives a command through Update the way Bubble Tea would.
@@ -181,7 +180,7 @@ func TestRefreshKeepsSelectionAndSkipsWhenBusy(t *testing.T) {
 		t.Fatalf("selection lost on background rescan: %v", m.current())
 	}
 	m.busy = "syncing b"
-	if _, cmd := m.Update(refreshMsg(time.Now())); cmd == nil {
+	if _, cmd := m.Update(refreshMsg{}); cmd == nil {
 		t.Fatal("refresh should at least re-arm its timer")
 	}
 }
@@ -210,7 +209,7 @@ func TestWorkspaceGroupingToggleAndPins(t *testing.T) {
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
 	t.Setenv("HERDR_PANE_ID", "")
 	root := t.TempDir()
-	m := NewWithPins(root, filepath.Join(t.TempDir(), "pins.json"))
+	m := newModel(root, filepath.Join(t.TempDir(), "pins.json"))
 	m.setRepos([]repo.Repo{{Name: "a", Status: repo.Status{Changes: []repo.Change{{Path: "x"}}}}, {Name: "b"}, {Name: "c"}})
 	next, _ := m.Update(herdrMsg{gen: m.gen, state: herdrStateWith(t, root, "w1", "c")})
 	m = next.(Model)

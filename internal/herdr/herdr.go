@@ -28,11 +28,10 @@ type State struct {
 	Available bool
 	Workspace string // HERDR_WORKSPACE_ID when running inside a Herdr pane
 
-	panes  map[string][]Pane // repo name -> panes inside it
-	labels map[string]string // workspace id -> label
+	panes          map[string][]Pane // repo name -> panes inside it
+	workspaceLabel string
 }
 
-// run executes a herdr command with a deadline.
 func run(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -41,33 +40,23 @@ func run(args ...string) ([]byte, error) {
 	return cmd.Output()
 }
 
-// do executes a herdr command and reports only success or failure.
 func do(args ...string) error {
 	_, err := run(args...)
 	return err
 }
 
-func call(args ...string) (map[string]any, error) {
+func call(result any, args ...string) error {
 	out, err := run(args...)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	var v struct {
-		Result map[string]any `json:"result"`
+		Result json.RawMessage `json:"result"`
 	}
 	if err := json.Unmarshal(out, &v); err != nil {
-		return nil, err
+		return err
 	}
-	return v.Result, nil
-}
-
-func decode[T any](v any) (T, error) {
-	var t T
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return t, err
-	}
-	return t, json.Unmarshal(raw, &t)
+	return json.Unmarshal(v.Result, result)
 }
 
 // Load maps every Herdr pane to the repository under root containing its cwd.
@@ -76,18 +65,15 @@ func Load(root string) State {
 	st := State{
 		Workspace: os.Getenv("HERDR_WORKSPACE_ID"),
 		panes:     map[string][]Pane{},
-		labels:    map[string]string{},
 	}
-	res, err := call("pane", "list")
-	if err != nil {
-		return st
+	var paneList struct {
+		Panes []Pane `json:"panes"`
 	}
-	panes, err := decode[[]Pane](res["panes"])
-	if err != nil {
+	if err := call(&paneList, "pane", "list"); err != nil {
 		return st
 	}
 	st.Available = true
-	for _, p := range panes {
+	for _, p := range paneList.Panes {
 		rel, err := filepath.Rel(root, p.Cwd)
 		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
 			continue
@@ -95,14 +81,17 @@ func Load(root string) State {
 		name := strings.SplitN(rel, string(filepath.Separator), 2)[0]
 		st.panes[name] = append(st.panes[name], p)
 	}
-	if ws, err := call("workspace", "list"); err == nil {
-		type workspace struct {
+	var workspaceList struct {
+		Workspaces []struct {
 			ID    string `json:"workspace_id"`
 			Label string `json:"label"`
-		}
-		if list, err := decode[[]workspace](ws["workspaces"]); err == nil {
-			for _, w := range list {
-				st.labels[w.ID] = w.Label
+		} `json:"workspaces"`
+	}
+	if err := call(&workspaceList, "workspace", "list"); err == nil {
+		for _, w := range workspaceList.Workspaces {
+			if w.ID == st.Workspace {
+				st.workspaceLabel = w.Label
+				break
 			}
 		}
 	}
@@ -119,44 +108,29 @@ func (s State) Pane(repo, workspace string) *Pane {
 	return nil
 }
 
-// HasRepos reports whether any pane of the workspace sits inside a repo.
-func (s State) HasRepos(workspace string) bool {
-	for _, ps := range s.panes {
-		for _, p := range ps {
-			if workspace == "" || p.WorkspaceID == workspace {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // WorkspaceLabel is the display name of the current workspace.
 func (s State) WorkspaceLabel() string {
-	if l := s.labels[s.Workspace]; l != "" {
-		return l
+	if s.workspaceLabel != "" {
+		return s.workspaceLabel
 	}
 	return s.Workspace
 }
 
-// SplitRight opens a shell pane to the right of pane without moving focus.
-// ratio is the share of the width the original pane keeps. It returns the
-// new pane's id.
-func SplitRight(pane, cwd string, ratio float64) (string, error) {
-	res, err := call("pane", "split", "--pane", pane, "--direction", "right",
-		"--ratio", strconv.FormatFloat(ratio, 'f', 2, 64), "--cwd", cwd, "--no-focus")
-	if err != nil {
+func splitRight(pane, cwd string, ratio float64) (string, error) {
+	var result struct {
+		Pane Pane `json:"pane"`
+	}
+	if err := call(&result, "pane", "split", "--pane", pane, "--direction", "right",
+		"--ratio", strconv.FormatFloat(ratio, 'f', 2, 64), "--cwd", cwd, "--no-focus"); err != nil {
 		return "", err
 	}
-	p, err := decode[Pane](res["pane"])
-	if err != nil || p.ID == "" {
+	if result.Pane.ID == "" {
 		return "", errors.New("herdr: split returned no pane id")
 	}
-	return p.ID, nil
+	return result.Pane.ID, nil
 }
 
-// Run submits a command line in a pane that sits at a shell prompt.
-func Run(pane, command string) error {
+func runInPane(pane, command string) error {
 	return do("pane", "run", pane, command)
 }
 

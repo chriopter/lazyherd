@@ -10,7 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/chriopter/lazyherd/internal/follow"
+	"github.com/chriopter/lazyherd/internal/herdr"
 	"github.com/chriopter/lazyherd/internal/ui"
 )
 
@@ -20,7 +20,7 @@ var version = "dev"
 func main() {
 	if len(os.Args) == 3 && os.Args[1] == "follow" {
 		// Companion mode, started by lazyherd itself in a Herdr pane.
-		if err := follow.Run(os.Args[2]); err != nil {
+		if err := herdr.Follow(os.Args[2]); err != nil {
 			fmt.Fprintln(os.Stderr, "lazyherd follow:", err)
 			os.Exit(1)
 		}
