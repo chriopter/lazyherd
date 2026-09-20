@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ import (
 func newTestModel(t *testing.T) Model {
 	t.Helper()
 	t.Setenv("HERDR_WORKSPACE_ID", "")
-	return New(t.TempDir())
+	return NewWithPins(t.TempDir(), filepath.Join(t.TempDir(), "pins.json"))
 }
 
 // run drives a command through Update the way Bubble Tea would.
@@ -279,7 +280,7 @@ func TestReflow(t *testing.T) {
 
 func TestWorkspaceToggle(t *testing.T) {
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
-	m := New(t.TempDir())
+	m := NewWithPins(t.TempDir(), filepath.Join(t.TempDir(), "pins.json"))
 	m.setRepos([]repo.Repo{{Name: "a"}, {Name: "b"}})
 	next, _ := m.Update(herdrMsg{gen: m.gen, state: herdr.State{Available: true, Workspace: "w1"}})
 	m = next.(Model)
@@ -304,7 +305,7 @@ func TestWorkspaceToggle(t *testing.T) {
 func TestWorkspaceReposAreGroupedFirst(t *testing.T) {
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
 	root := t.TempDir()
-	m := New(root)
+	m := NewWithPins(root, filepath.Join(t.TempDir(), "pins.json"))
 	m.setRepos([]repo.Repo{{Name: "a", Changes: 5}, {Name: "b"}, {Name: "c", Changes: 1}})
 	st := herdrStateWith(root, "w1", "c")
 	next, _ := m.Update(herdrMsg{gen: m.gen, state: st})
@@ -354,4 +355,35 @@ func herdrStateWith(t_root, workspace string, repos ...string) herdr.State {
 	os.WriteFile(bin+"/herdr", []byte(script), 0o755)
 	os.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return herdr.Load(t_root)
+}
+
+func TestSpacePinsRepoToWorkspace(t *testing.T) {
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	root := t.TempDir()
+	m := NewWithPins(root, filepath.Join(t.TempDir(), "pins.json"))
+	m.setRepos([]repo.Repo{{Name: "a"}, {Name: "b"}, {Name: "c"}})
+	next, _ := m.Update(herdrMsg{gen: m.gen, state: herdrStateWith(root, "w1", "c")})
+	m = next.(Model)
+	m.selectRepo(2) // grouping puts c first, then a, b
+	if m.current().Name != "b" {
+		t.Fatalf("expected b selected, got %s", m.current().Name)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	m = next.(Model)
+	if !m.pinned("b") || !m.inWorkspace("b") {
+		t.Fatal("space should pin the repo")
+	}
+	if !m.inWorkspace(m.repos[m.visible[0]].Name) || !m.inWorkspace(m.repos[m.visible[1]].Name) {
+		t.Fatalf("pinned repo should join the workspace group, order: %v", m.visible)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	m = next.(Model)
+	if len(m.visible) != 2 {
+		t.Fatalf("workspace view should show pane repo and pinned repo, got %d", len(m.visible))
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	m = next.(Model)
+	if m.pinned("b") || len(m.visible) != 1 {
+		t.Fatal("space again should unpin and drop the repo from the workspace view")
+	}
 }

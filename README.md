@@ -19,7 +19,7 @@ in the one you pick. Press Esc to get back from lazygit to the overview.
 - Refreshes on its own: status every 3 seconds, `git fetch --all` in every repo once a minute.
 - Name filter.
 - Keyboard and mouse selection.
-- Herdr: started inside a workspace, groups that workspace's repos first and marks them with ⌂; `w` narrows the list to them; jump to a repo's tab or open one.
+- Herdr: started inside a workspace, groups that workspace's repos first and marks them with ⌂; Space pins any other repo to the workspace (★, remembered in `~/.config/lazyherd/pins.json`); `w` narrows the list to them; jump to a repo's tab or open one.
 - Light and dark terminal themes.
 
 ## Install
@@ -60,6 +60,7 @@ lazyherd ~/code     # or any directory of repos
 | `/` | Filter by name |
 | `t` | Jump to the repo's Herdr tab, or open one |
 | `w` | Toggle between the current Herdr workspace and all repos |
+| `space` | Pin the selected repo to the current Herdr workspace, or unpin it |
 | `q` | Quit |
 
 Notes:

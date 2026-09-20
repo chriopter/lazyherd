@@ -280,7 +280,10 @@ func (m Model) row(r repo.Repo, selected bool, nameW, branchW, width int) string
 	group := ""
 	if gw := m.groupWidth(); gw > 0 {
 		group = sp(gw)
-		if m.inWorkspace(r.Name) {
+		switch {
+		case m.pinned(r.Name):
+			group = st(dirtyStyle).Render("★") + sp(gw-1)
+		case m.inWorkspace(r.Name):
 			group = st(branchStyle).Render("⌂") + sp(gw-1)
 		}
 	}
@@ -449,6 +452,11 @@ func (m Model) help() string {
 			keys = append(keys, k("w", "show all repos"))
 		} else {
 			keys = append(keys, k("w", "workspace only"))
+		}
+		if r := m.current(); r != nil && m.pinned(r.Name) {
+			keys = append(keys, k("space", "unpin"))
+		} else {
+			keys = append(keys, k("space", "pin to workspace"))
 		}
 	}
 	keys = append(keys, k("q", "quit"))

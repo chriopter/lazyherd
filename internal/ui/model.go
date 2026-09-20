@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/chriopter/lazyherd/internal/herdr"
+	"github.com/chriopter/lazyherd/internal/pins"
 	"github.com/chriopter/lazyherd/internal/repo"
 )
 
@@ -40,7 +41,8 @@ type Model struct {
 	herdr   herdr.State
 
 	focus      pane
-	fileCursor int // index into preview.files of the selected repo
+	fileCursor int         // index into preview.files of the selected repo
+	pins       *pins.Store // repos pinned to workspaces by hand
 
 	gen      int                 // bumped on every rescan; stale results are dropped
 	previews map[string]preview  // cached by repo name for the current gen
@@ -64,7 +66,14 @@ type Model struct {
 
 // New creates the model for a directory of repositories.
 func New(root string) Model {
+	return NewWithPins(root, pins.Path())
+}
+
+// NewWithPins is New with an explicit pin file, for tests.
+func NewWithPins(root, pinPath string) Model {
+	store, _ := pins.Load(pinPath) // an unreadable file just means no pins
 	return Model{
+		pins:     store,
 		root:     root,
 		gen:      1,
 		loading:  true,
@@ -132,9 +141,18 @@ func (m *Model) setRepos(repos []repo.Repo) {
 	m.applyFilter(keep)
 }
 
-// inWorkspace reports whether a repo has a pane in the current Herdr workspace.
+// inWorkspace reports whether a repo belongs to the current Herdr workspace:
+// Herdr has a pane in it, or the user pinned it.
 func (m Model) inWorkspace(name string) bool {
-	return m.herdr.Workspace != "" && m.herdr.Pane(name, m.herdr.Workspace) != nil
+	if m.herdr.Workspace == "" {
+		return false
+	}
+	return m.herdr.Pane(name, m.herdr.Workspace) != nil || m.pinned(name)
+}
+
+// pinned reports whether the user pinned a repo to the current workspace.
+func (m Model) pinned(name string) bool {
+	return m.pins != nil && m.pins.Pinned(m.herdr.WorkspaceLabel(), name)
 }
 
 // applyFilter recomputes the visible rows and selects the repo named keep.
@@ -510,6 +528,13 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "w":
 		if m.herdr.Workspace != "" && m.herdr.Available {
 			m.workspaceOnly = !m.workspaceOnly
+			m.refilter()
+		}
+	case " ":
+		if r := m.current(); r != nil && m.herdr.Workspace != "" && m.pins != nil {
+			if err := m.pins.Toggle(m.herdr.WorkspaceLabel(), r.Name); err != nil {
+				m.status = "pins: " + err.Error()
+			}
 			m.refilter()
 		}
 	case "c":
