@@ -4,6 +4,7 @@ package ui
 
 import (
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,19 +21,22 @@ import (
 
 // Model is the whole application state.
 type Model struct {
-	root    string
-	repos   []repo.Repo
-	visible []int // indices into repos that pass the filters
-	cursor  int   // index into visible
-	herdr   herdr.State
-	pins    *pins
+	root         string
+	repos        []repo.Repo
+	visible      []int         // indices into repos that pass the filters
+	cursor       int           // index into visible
+	commits      []repo.Commit // newest commits across all repos, for the Changes tab
+	changes      []repo.Commit // rows of the Changes tab: uncommitted work, then commits, filtered
+	changeCursor int           // index into changes
+	herdr        herdr.State
+	pins         *pins
 
 	ownPane       string         // HERDR_PANE_ID, the pane lazyherd runs in
 	companionPane string         // Herdr pane running the follower, "" until it is up
 	companion     io.WriteCloser // connection to the follower
 	starting      bool           // companion pane is on its way
 	selSeq        int            // bumped on every selection change, for debouncing
-	shown         string         // repo the companion currently shows
+	shown         string         // what the companion currently shows: a repo, or a repo and change
 
 	theme   theme
 	version string
@@ -45,6 +49,8 @@ type Model struct {
 	filtering     bool   // typing into the name filter
 	filter        string // current name filter
 	workspaceOnly bool   // only repos of the current Herdr workspace (w toggles)
+	timeline      bool   // the Changes tab is open instead of the Repos tab
+	timelineSeq   int    // bumped on every timeline load; older results are dropped
 	status        string // transient note in the title bar
 }
 
@@ -105,11 +111,91 @@ func (m *Model) rescan() tea.Cmd {
 	return m.scanCmds()
 }
 
+// current is the selected repo: the selected row of the Repos tab, or the
+// repo of the selected change in the Changes tab.
 func (m Model) current() *repo.Repo {
+	if m.timeline {
+		c := m.currentChange()
+		if c == nil {
+			return nil
+		}
+		for i := range m.repos {
+			if m.repos[i].Name == c.Repo {
+				return &m.repos[i]
+			}
+		}
+		return nil
+	}
 	if m.cursor >= len(m.visible) {
 		return nil
 	}
 	return &m.repos[m.visible[m.cursor]]
+}
+
+// currentChange is the selected row of the Changes tab.
+func (m Model) currentChange() *repo.Commit {
+	if m.changeCursor >= len(m.changes) {
+		return nil
+	}
+	return &m.changes[m.changeCursor]
+}
+
+// rowCount is the number of rows in the open tab.
+func (m Model) rowCount() int {
+	if m.timeline {
+		return len(m.changes)
+	}
+	return len(m.visible)
+}
+
+// cursorPos is the selected row of the open tab.
+func (m Model) cursorPos() int {
+	if m.timeline {
+		return m.changeCursor
+	}
+	return m.cursor
+}
+
+// activeCursor is the cursor of the open tab.
+func (m *Model) activeCursor() *int {
+	if m.timeline {
+		return &m.changeCursor
+	}
+	return &m.cursor
+}
+
+// setTab opens the Repos tab or the Changes tab. The selected repo stays:
+// the Changes tab opens at its newest change, the Repos tab at the repo of
+// the selected change.
+func (m *Model) setTab(changes bool) tea.Cmd {
+	if m.timeline == changes {
+		return nil
+	}
+	keep := ""
+	if r := m.current(); r != nil {
+		keep = r.Name
+	}
+	m.timeline = changes
+	m.applyFilter(keep)
+	m.applyChangeFilter("", keep)
+	if changes {
+		return tea.Batch(m.selected(), m.loadTimeline())
+	}
+	return m.selected()
+}
+
+// loadTimeline reads the commits of every repo for the Changes tab.
+func (m *Model) loadTimeline() tea.Cmd {
+	m.timelineSeq++
+	return timelineCmd(m.timelineSeq, m.root, m.repos)
+}
+
+// setCommits replaces the commits and keeps the selected change.
+func (m *Model) setCommits(commits []repo.Commit) {
+	keep, keepHash := m.selection()
+	m.commits = commits
+	m.applyFilter(keep)
+	m.applyChangeFilter(keepHash, keep)
 }
 
 func (m Model) currentDir() string { return filepath.Join(m.root, m.current().Name) }
@@ -127,27 +213,28 @@ func (m Model) pinned(name string) bool {
 
 // setRepos replaces the repository list and keeps the selection by name.
 func (m *Model) setRepos(repos []repo.Repo) {
-	keep := ""
-	if r := m.current(); r != nil {
-		keep = r.Name
-	}
+	keep, keepHash := m.selection()
 	m.repos = repos
 	m.applyFilter(keep)
+	m.applyChangeFilter(keepHash, keep)
+}
+
+// passes reports whether a repo passes the name and workspace filters.
+func (m Model) passes(name string) bool {
+	if f := strings.ToLower(m.filter); f != "" && !strings.Contains(strings.ToLower(name), f) {
+		return false
+	}
+	return !m.workspaceOnly || m.inWorkspace(name)
 }
 
 // applyFilter recomputes the visible rows and selects the repo named keep.
 // With a Herdr workspace the workspace's repos are grouped first.
 func (m *Model) applyFilter(keep string) {
 	m.visible = m.visible[:0]
-	f := strings.ToLower(m.filter)
 	for i, r := range m.repos {
-		if f != "" && !strings.Contains(strings.ToLower(r.Name), f) {
-			continue
+		if m.passes(r.Name) {
+			m.visible = append(m.visible, i)
 		}
-		if m.workspaceOnly && !m.inWorkspace(r.Name) {
-			continue
-		}
-		m.visible = append(m.visible, i)
 	}
 	if !m.workspaceOnly {
 		sort.SliceStable(m.visible, func(a, b int) bool {
@@ -162,12 +249,56 @@ func (m *Model) applyFilter(keep string) {
 	}
 }
 
-func (m *Model) refilter() {
-	keep := ""
-	if r := m.current(); r != nil {
-		keep = r.Name
+// applyChangeFilter recomputes the rows of the Changes tab, uncommitted
+// work of the listed repos first, then their commits, and selects the change
+// keep of keepRepo, or else keepRepo's newest change.
+func (m *Model) applyChangeFilter(keep, keepRepo string) {
+	m.changes = m.changes[:0]
+	for _, i := range m.visible {
+		if r := m.repos[i]; r.Err == nil && r.Dirty() {
+			m.changes = append(m.changes, repo.Commit{Repo: r.Name, Hash: repo.WorkTree, Time: m.now})
+		}
 	}
+	for _, c := range m.commits {
+		if m.passes(c.Repo) {
+			m.changes = append(m.changes, c)
+		}
+	}
+	m.changeCursor = 0
+	byRepo := -1
+	for i, c := range m.changes {
+		if c.Hash == keep && c.Repo == keepRepo {
+			m.changeCursor = i
+			return
+		} else if byRepo < 0 && c.Repo == keepRepo {
+			byRepo = i
+		}
+	}
+	if byRepo >= 0 {
+		m.changeCursor = byRepo
+	}
+}
+
+// selection names the selected repo and, in the Changes tab, the selected
+// change, for keeping them across a refresh.
+func (m Model) selection() (name, hash string) {
+	if r := m.current(); r != nil {
+		name = r.Name
+	}
+	if c := m.currentChange(); c != nil {
+		hash = c.Hash
+	} else if m.cursor < len(m.visible) {
+		// No change selected yet, e.g. the commits are still loading: keep
+		// the repo the Repos tab had selected.
+		name = m.repos[m.visible[m.cursor]].Name
+	}
+	return name, hash
+}
+
+func (m *Model) refilter() {
+	keep, keepHash := m.selection()
 	m.applyFilter(keep)
+	m.applyChangeFilter(keepHash, keep)
 }
 
 // selected schedules the companion update for the current selection.
@@ -179,19 +310,44 @@ func (m *Model) selected() tea.Cmd {
 	return selectionTick(m.selSeq)
 }
 
-// showCurrent tells the companion pane to open the selected repo. A dead
+// showCurrent tells the companion pane what to show: lazygit for the
+// selected repo, or in the Changes tab the selected change. A dead
 // connection drops the companion, so that Enter opens a new one.
 func (m *Model) showCurrent() {
 	r := m.current()
-	if m.companion == nil || r == nil || r.Name == m.shown {
+	if m.companion == nil || r == nil {
 		return
 	}
-	if err := herdr.SendSelection(m.companion, m.currentDir()); err != nil {
+	key, send := r.Name, func() error { return herdr.SendSelection(m.companion, m.currentDir()) }
+	if c := m.currentChange(); m.timeline && c != nil {
+		rev := c.Hash
+		if rev == repo.WorkTree {
+			// Uncommitted work changes under the pane: show it again when
+			// the files change.
+			rev += ":" + worktreeVersion(*r)
+		}
+		key = r.Name + "\x1f" + rev
+		send = func() error { return herdr.SendChange(m.companion, m.currentDir(), rev) }
+	}
+	if key == m.shown {
+		return
+	}
+	if err := send(); err != nil {
 		m.status = "lazygit pane is gone, Enter opens a new one"
 		m.companion, m.companionPane, m.shown = nil, "", ""
 		return
 	}
-	m.shown = r.Name
+	m.shown = key
+}
+
+// worktreeVersion identifies the state of a repo's uncommitted changes.
+func worktreeVersion(r repo.Repo) string {
+	h := fnv.New32a()
+	fmt.Fprint(h, r.Head)
+	for _, c := range r.Changes {
+		fmt.Fprint(h, c.Code(), c.Path, "\x00")
+	}
+	return fmt.Sprintf("%08x", h.Sum32())
 }
 
 // idle reports whether nothing is running that a background job could disturb.
@@ -231,6 +387,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "scan failed: " + msg.err.Error()
 		}
 		m.setRepos(msg.repos)
+		if m.timeline {
+			return m, tea.Batch(m.selected(), m.loadTimeline())
+		}
+		return m, m.selected()
+
+	case timelineMsg:
+		if msg.seq != m.timelineSeq {
+			return m, nil
+		}
+		m.setCommits(msg.commits)
 		return m, m.selected()
 
 	case herdrMsg:
@@ -299,8 +465,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if changes, ok := m.tabAt(msg.X, msg.Y); ok {
+				return m, m.setTab(changes)
+			}
 			if i, ok := m.repoRowAt(msg.Y); ok {
-				m.cursor = i
+				*m.activeCursor() = i
 				return m, m.selected()
 			}
 		}
@@ -361,13 +530,22 @@ func (m Model) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.quit()
 
 	case "down", "j":
-		m.cursor = min(m.cursor+1, max(0, len(m.visible)-1))
+		cur := m.activeCursor()
+		*cur = min(*cur+1, max(0, m.rowCount()-1))
 	case "up", "k":
-		m.cursor = max(m.cursor-1, 0)
+		cur := m.activeCursor()
+		*cur = max(*cur-1, 0)
 	case "g", "home":
-		m.cursor = 0
+		*m.activeCursor() = 0
 	case "G", "end":
-		m.cursor = max(0, len(m.visible)-1)
+		*m.activeCursor() = max(0, m.rowCount()-1)
+
+	case "tab":
+		return m, m.setTab(!m.timeline)
+	case "[":
+		return m, m.setTab(false)
+	case "]":
+		return m, m.setTab(true)
 
 	case "/":
 		m.filtering = true

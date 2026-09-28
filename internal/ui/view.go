@@ -17,6 +17,7 @@ const (
 	ageMinW      = 36 // below this width the last-commit column is dropped
 	branchMinW   = 52 // below this width the branch column is dropped
 	ageW         = 3  // "12M"
+	authorMaxW   = 10 // timeline author column
 
 	// Screen row of the first repo line: status panel plus the list's top border.
 	repoRowsTop = statusPanelH + 1
@@ -50,15 +51,24 @@ func (m Model) border(active bool) lipgloss.Style {
 // frame draws a gocui-style box: the title sits in the top border after a
 // "[n]" prefix, the subtitle at the top right, the footer at the bottom right.
 func (m Model) frame(index int, title, subtitle, footer string, body []string, width, height int, style lipgloss.Style) string {
+	return m.styledFrame(index, title, style.Render(title), subtitle, footer, body, width, height, style)
+}
+
+// styledFrame is frame with a title that brings its own styling, such as
+// tabs; title is the same text unstyled.
+func (m Model) styledFrame(index int, title, styledTitle, subtitle, footer string, body []string, width, height int, style lipgloss.Style) string {
 	r := m.theme.frame
 	h, v := string(r[0]), string(r[1])
 	inner := width - 2
 
-	top := fmt.Sprintf("%s[%d]%s%s", h, index, h, title)
-	if subtitle != "" && lipgloss.Width(top)+lipgloss.Width(subtitle)+6 <= inner {
-		top += strings.Repeat(h, inner-lipgloss.Width(top)-lipgloss.Width(subtitle)-4) + subtitle + strings.Repeat(h, 4)
+	prefix := fmt.Sprintf("%s[%d]%s", h, index, h)
+	rest := ""
+	used := lipgloss.Width(prefix) + lipgloss.Width(title)
+	if subtitle != "" && used+lipgloss.Width(subtitle)+6 <= inner {
+		rest = strings.Repeat(h, inner-used-lipgloss.Width(subtitle)-4) + subtitle + strings.Repeat(h, 4)
 	}
-	top = string(r[2]) + top + strings.Repeat(h, max(inner-lipgloss.Width(top), 0)) + string(r[3])
+	rest += strings.Repeat(h, max(inner-used-lipgloss.Width(rest), 0))
+	top := style.Render(string(r[2])+prefix) + styledTitle + style.Render(rest+string(r[3]))
 
 	bottom := strings.Repeat(h, inner)
 	if footer != "" && lipgloss.Width(footer)+1 <= inner {
@@ -67,7 +77,7 @@ func (m Model) frame(index int, title, subtitle, footer string, body []string, w
 	bottom = string(r[4]) + bottom + string(r[5])
 
 	rows := make([]string, 0, height)
-	rows = append(rows, style.Render(top))
+	rows = append(rows, top)
 	for i := 0; i < height-2; i++ {
 		content := ""
 		if i < len(body) {
@@ -102,15 +112,78 @@ func (m Model) reposPanel(height int) string {
 	if !m.workspaceOnly {
 		subtitle += " (all)"
 	}
-	title := "Repos"
-	if m.filter != "" {
-		title += " (filtered)"
+	rows := m.rows
+	if m.timeline {
+		rows = m.changeRows
 	}
 	footer := ""
-	if len(m.visible) > 0 {
-		footer = fmt.Sprintf("%d of %d", m.cursor+1, len(m.visible))
+	if n := m.rowCount(); n > 0 {
+		footer = fmt.Sprintf("%d of %d", m.cursorPos()+1, n)
 	}
-	return m.frame(1, title, subtitle, footer, m.rows(m.width-2), m.width, height, m.border(true))
+	title, styled := m.tabsTitle(m.border(true))
+	return m.styledFrame(1, title, styled, subtitle, footer, rows(m.width-2), m.width, height, m.border(true))
+}
+
+// tabNames are the list's tabs, in order; the second is the Changes tab.
+var tabNames = [2]string{"Repos", "Changes"}
+
+const (
+	tabSep    = " - "
+	tabsLeft  = 6 // screen column where the tabs start: corner, "─[1]─"
+	tabsWidth = 5 + 3 + 7
+)
+
+// tabsTitle renders the tabs the way lazygit titles a view with tabs: the
+// open one highlighted, the other plain. A list too narrow for both shows
+// only the open one.
+func (m Model) tabsTitle(style lipgloss.Style) (title, styled string) {
+	suffix := ""
+	if m.filter != "" {
+		suffix = " (filtered)"
+	}
+	open := 0
+	if m.timeline {
+		open = 1
+	}
+	if !m.tabsShown() {
+		title = tabNames[open] + suffix
+		if tabsLeft-1+len(title) > m.width-2 {
+			title = tabNames[open]
+		}
+		return title, style.Render(title)
+	}
+	for i, name := range tabNames {
+		if i > 0 {
+			title += tabSep
+			styled += style.Render(tabSep)
+		}
+		title += name
+		if i == open {
+			styled += style.Bold(true).Render(name)
+		} else {
+			styled += m.theme.text.Render(name)
+		}
+	}
+	return title + suffix, styled + style.Render(suffix)
+}
+
+// tabsShown reports whether the list is wide enough to show both tabs.
+func (m Model) tabsShown() bool {
+	return m.width-2 >= tabsLeft-1+tabsWidth+len(" (filtered)")
+}
+
+// tabAt maps a click on the list's top border to a tab.
+func (m Model) tabAt(x, y int) (changes, ok bool) {
+	if y != statusPanelH || !m.tabsShown() {
+		return false, false
+	}
+	switch x -= tabsLeft; {
+	case x >= 0 && x < len(tabNames[0]):
+		return false, true
+	case x >= len(tabNames[0])+len(tabSep) && x < tabsWidth:
+		return true, true
+	}
+	return false, false
 }
 
 // syncState renders the branch status the way lazygit's BranchStatus does.
@@ -190,8 +263,8 @@ func (m Model) groupWidth() int {
 // repoWindow is the range of visible repo rows that fits the list height.
 func (m Model) repoWindow() (start, count int) {
 	count = max(m.height-statusPanelH-3, 1) // list borders and options line
-	if m.cursor >= count {
-		start = m.cursor - count + 1
+	if cur := m.cursorPos(); cur >= count {
+		start = cur - count + 1
 	}
 	return start, count
 }
@@ -200,7 +273,7 @@ func (m Model) repoWindow() (start, count int) {
 func (m Model) repoRowAt(y int) (int, bool) {
 	start, count := m.repoWindow()
 	i := start + y - repoRowsTop
-	if y < repoRowsTop || i-start >= count || i >= len(m.visible) {
+	if y < repoRowsTop || i-start >= count || i >= m.rowCount() {
 		return 0, false
 	}
 	return i, true
@@ -217,6 +290,121 @@ func (m Model) rows(width int) []string {
 		rows = append(rows, dim.Render(" no repositories"))
 	}
 	return rows
+}
+
+// changeRows renders the Changes tab: uncommitted work first, then commits
+// with age, repo and subject, and the author at the right when the list is
+// wide enough.
+func (m Model) changeRows(width int) []string {
+	repoW, authorW := 4, 0
+	for _, c := range m.changes {
+		repoW = max(repoW, len(c.Repo))
+		authorW = max(authorW, len([]rune(firstName(c.Author))))
+	}
+	repoW = min(repoW, max(width/4, 8))
+	if width < branchMinW {
+		authorW = 0
+	}
+	authorW = min(authorW, authorMaxW)
+	start, count := m.repoWindow()
+	var rows []string
+	for i := start; i < len(m.changes) && i-start < count; i++ {
+		rows = append(rows, m.changeRow(m.changes[i], i == m.changeCursor, repoW, authorW, width))
+	}
+	if len(m.changes) == 0 {
+		rows = append(rows, dim.Render(" no changes"))
+	}
+	return rows
+}
+
+func (m Model) changeRow(c repo.Commit, selected bool, repoW, authorW, width int) string {
+	sp := func(n int) string {
+		return m.style(lipgloss.NewStyle(), selected).Render(strings.Repeat(" ", n))
+	}
+	worktree := c.Hash == repo.WorkTree
+	age := m.style(dim, selected).Render(fmt.Sprintf("%*s", ageW, repo.Ago(m.now, c.Time)))
+	if worktree {
+		age = m.style(m.theme.unstaged, selected).Render(fmt.Sprintf("%*s", ageW, "●"))
+	}
+	line := sp(1) + age + sp(1)
+	group := ""
+	if gw := m.groupWidth(); gw > 0 {
+		group = sp(gw)
+		switch {
+		case m.pinned(c.Repo):
+			group = m.style(yellow, selected).Render("★") + sp(gw-1)
+		case m.inWorkspace(c.Repo):
+			group = m.style(cyan, selected).Render("⌂") + sp(gw-1)
+		}
+	}
+	line += group + m.style(cyan, selected).Render(fmt.Sprintf("%-*.*s", repoW, repoW, c.Repo)) + sp(1)
+	subjectW := width - lipgloss.Width(line)
+	if authorW > 0 {
+		subjectW -= authorW + 1
+	}
+	if worktree {
+		summary := m.worktreeSummary(c.Repo, selected)
+		line += summary + sp(max(subjectW-lipgloss.Width(summary), 0))
+	} else {
+		line += m.style(m.theme.text, selected).Render(fmt.Sprintf("%-*s", max(subjectW, 0), truncate(c.Subject, subjectW)))
+	}
+	if authorW > 0 {
+		line += sp(1) + m.style(green, selected).Render(fmt.Sprintf("%-*s", authorW, truncate(firstName(c.Author), authorW)))
+	}
+	if selected {
+		line += sp(max(width-lipgloss.Width(line), 0))
+	}
+	return lipgloss.NewStyle().MaxWidth(width).Render(line)
+}
+
+// worktreeSummary counts a repo's uncommitted files the way lazygit colors
+// them: staged in green, unstaged and untracked in the unstaged color.
+func (m Model) worktreeSummary(name string, selected bool) string {
+	var staged, unstaged, untracked int
+	for _, r := range m.repos {
+		if r.Name != name {
+			continue
+		}
+		for _, c := range r.Changes {
+			switch {
+			case c.Untracked:
+				untracked++
+			default:
+				if c.Staged != '.' {
+					staged++
+				}
+				if c.Unstaged != '.' {
+					unstaged++
+				}
+			}
+		}
+	}
+	var parts []string
+	for _, p := range []struct {
+		n     int
+		label string
+		style lipgloss.Style
+	}{{staged, "staged", green}, {unstaged, "unstaged", m.theme.unstaged}, {untracked, "untracked", m.theme.unstaged}} {
+		if p.n > 0 {
+			parts = append(parts, m.style(p.style, selected).Render(fmt.Sprintf("%d %s", p.n, p.label)))
+		}
+	}
+	return strings.Join(parts, m.style(dim, selected).Render(" · "))
+}
+
+// truncate cuts s to width runes, ending in an ellipsis when cut.
+func truncate(s string, width int) string {
+	r := []rune(s)
+	if width <= 0 || len(r) <= width {
+		return s
+	}
+	return string(r[:width-1]) + "…"
+}
+
+// firstName shortens an author to the part before the first space.
+func firstName(author string) string {
+	name, _, _ := strings.Cut(author, " ")
+	return name
 }
 
 func (m Model) row(r repo.Repo, selected bool, nameW, branchW int, age bool, width int) string {
@@ -294,7 +482,13 @@ func (m Model) bottomLine() string {
 
 func (m Model) options() string {
 	type opt struct{ desc, key string }
-	opts := []opt{{"Open", "<enter>"}, {"Sync", "p"}, {"Sync listed", "P"}, {"Filter", "/"}, {"Herdr tab", "t"}}
+	opts := []opt{{"Open", "<enter>"}}
+	if m.timeline {
+		opts = append(opts, opt{"Repos", "<tab>"})
+	} else {
+		opts = append(opts, opt{"Changes", "<tab>"})
+	}
+	opts = append(opts, opt{"Sync", "p"}, opt{"Sync listed", "P"}, opt{"Filter", "/"}, opt{"Herdr tab", "t"})
 	if m.workspaceOnly {
 		opts = append(opts, opt{"All repos", "w"})
 	} else {

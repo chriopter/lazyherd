@@ -14,6 +14,7 @@ which are ahead or behind; the repo you select is opened in
 - Opens in its own Herdr tab: the list on the left, lazygit on the right. Moving the selection switches the repo.
 - Sync: fast-forward pull, then push when ahead; for the selected repo or every listed repo.
 - Refreshes on its own: status every 3 seconds, `git fetch --all` in every repo once a minute.
+- Two tabs: **Repos** with lazygit next to it, and **Changes**, a timeline across all repos: uncommitted work first, then the newest commits of the local and remote-tracking branches. For a change the right pane shows its changed files with line counts and totals, then the diff, in a pager.
 - Name filter.
 - Herdr workspaces: repos with a pane in the current workspace come first, marked ⌂; Space pins any other repo to the workspace (★); `w` narrows the list to them; `t` jumps to a repo's tab or opens one.
 - Looks like lazygit: same frames, status panel, options bar and colors. Reads `~/.config/lazygit/config.yml` for the theme, border style and nerd-font icons, so both panes match.
@@ -58,7 +59,8 @@ root: ~/code
 
 | Key | Action |
 |-----|--------|
-| `↵` | Focus the lazygit pane |
+| `↵` | Focus the lazygit pane, or the change's pager |
+| `tab` `[` `]` | Switch between the Repos and Changes tabs (or click a tab) |
 | `p` | Sync the selected repo: `git pull --ff-only`, then `git push` if ahead |
 | `P` | Sync every listed repo |
 | `/` | Filter by name |

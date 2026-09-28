@@ -22,6 +22,10 @@ type (
 		state herdr.State
 		err   error
 	}
+	timelineMsg struct {
+		seq     int
+		commits []repo.Commit
+	}
 	fetchDoneMsg  struct{ failed []string }
 	syncDoneMsg   []repo.SyncResult
 	tabCreatedMsg struct{ name string }
@@ -43,6 +47,8 @@ const (
 	selectionDelay = 250 * time.Millisecond
 	spinEvery      = 180 * time.Millisecond // lazygit's spinner rate
 	companionRatio = 0.3                    // share of the width the list keeps; lazygit gets the rest
+	commitsPerRepo = 30                     // newest commits read from each repo for the timeline
+	timelineLimit  = 300                    // commits the timeline keeps
 )
 
 func refreshTick() tea.Cmd {
@@ -76,6 +82,12 @@ func herdrCmd(gen int, root string) tea.Cmd {
 	return func() tea.Msg {
 		state, err := herdr.Load(root)
 		return herdrMsg{gen: gen, state: state, err: err}
+	}
+}
+
+func timelineCmd(seq int, root string, repos []repo.Repo) tea.Cmd {
+	return func() tea.Msg {
+		return timelineMsg{seq: seq, commits: repo.Timeline(root, repos, commitsPerRepo, timelineLimit)}
 	}
 }
 

@@ -13,14 +13,18 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/charmbracelet/x/term"
+
+	"github.com/chriopter/lazyherd/internal/repo"
 )
 
 // resetTerminal repairs the terminal when lazygit cannot clean up after
 // itself: mouse, focus and in-band resize reports off, main screen, cursor on.
 const resetTerminal = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2048l\x1b[?1049l\x1b[?25h\x1b[0m"
 
-// Follow listens for repository paths and keeps lazygit open for the latest
-// one. When the cockpit goes away, so does the pane this runs in: it was
+// Follow listens for selections and keeps the latest one open: lazygit for
+// a repository, or a pager over one change. When the cockpit goes away, so does the pane this runs in: it was
 // split off for lazygit alone, and a bare shell there would only linger.
 func Follow(socket string) error {
 	_ = os.Remove(socket)
@@ -61,11 +65,11 @@ func followSelections(input io.Reader, quit <-chan os.Signal) error {
 	}()
 	for {
 		select {
-		case dir, ok := <-paths:
+		case line, ok := <-paths:
 			if !ok {
 				return nil
 			}
-			if err := process.open(dir); err != nil {
+			if err := process.open(line); err != nil {
 				fmt.Fprintf(os.Stderr, "lazyherd: %v\n", err)
 			}
 		case <-quit:
@@ -77,20 +81,40 @@ func followSelections(input io.Reader, quit <-chan os.Signal) error {
 type lazygitProcess struct {
 	cmd  *exec.Cmd
 	done chan struct{}
-	dir  string
+	dir  string // the selection line the process shows
 }
 
-func (p *lazygitProcess) open(dir string) error {
-	if p.cmd != nil && p.dir == dir && p.running() {
+// open shows a selection line: lazygit for a bare directory, the pager for
+// a change. The same selection keeps a running process.
+func (p *lazygitProcess) open(line string) error {
+	if p.cmd != nil && p.dir == line && p.running() {
 		return nil
 	}
 	p.stop()
-	cmd := exec.Command("lazygit", "-p", dir)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	var cmd *exec.Cmd
+	if rev, dir, ok := strings.Cut(line, changeSep); ok {
+		width, _, err := term.GetSize(os.Stdout.Fd())
+		if err != nil {
+			width = 80
+		}
+		text, err := repo.Changes(dir, rev, width)
+		if err != nil {
+			return err
+		}
+		// The pager reads its keys from the terminal, the text from stdin.
+		cmd = exec.Command("less", "-R", "--mouse")
+		cmd.Env = append(os.Environ(), "LESS=")
+		cmd.Stdin = strings.NewReader(text)
+	} else {
+		cmd = exec.Command("lazygit", "-p", line)
+		cmd.Stdin = os.Stdin
+	}
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	p.dir = line
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	p.cmd, p.dir, p.done = cmd, dir, make(chan struct{})
+	p.cmd, p.done = cmd, make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
 		close(p.done)
@@ -127,9 +151,20 @@ func (p *lazygitProcess) stop() {
 	_ = sane.Run()
 }
 
+// changeSep separates the revision from the directory in a change
+// selection; a line without it is a directory for lazygit.
+const changeSep = "\x1f"
+
 // SendSelection tells the follower which repository lazygit should open.
 func SendSelection(conn io.Writer, dir string) error {
 	_, err := fmt.Fprintln(conn, dir)
+	return err
+}
+
+// SendChange tells the follower to show one change of a repository: a
+// commit, or repo.WorkTree for the uncommitted changes.
+func SendChange(conn io.Writer, dir, rev string) error {
+	_, err := fmt.Fprintln(conn, rev+changeSep+dir)
 	return err
 }
 
