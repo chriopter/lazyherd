@@ -5,7 +5,13 @@ one directory. A narrow list shows which repos have uncommitted changes and
 which are ahead or behind; the repo you select is opened in
 [lazygit](https://github.com/jesseduffield/lazygit) in the pane next to it.
 
-![lazyherd](docs/screenshot.png)
+![lazyherd, Repos tab](docs/screenshot.png)
+
+The Changes tab is a timeline across all repos: uncommitted work first, then
+the newest commits. Next to it the selected change, with its files, line
+counts and diff.
+
+![lazyherd, Changes tab](docs/screenshot-changes.png)
 
 ## Features
 

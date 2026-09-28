@@ -2,7 +2,7 @@
 
 id = "chriopter.lazyherd"
 name = "lazyherd"
-version = "0.11.0"
+version = "0.12.0"
 min_herdr_version = "0.7.4"
 description = "Cockpit over every Git repo: changes, sync state, lazygit next to it"
 platforms = ["linux", "macos"]
