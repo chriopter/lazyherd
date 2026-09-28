@@ -72,7 +72,7 @@ func Changes(dir, rev string, width int) (string, error) {
 	stat := "--stat=" + strconv.Itoa(max(width, 40))
 	if base, _, _ := strings.Cut(rev, ":"); base != WorkTree {
 		return git(gitTimeout, dir, "show", "--color=always", stat, "--summary", "--patch",
-			"--format=%C(yellow)%h%C(reset) %C(bold)%s%C(reset)%n%C(green)%an%C(reset) · %ad (%ar)%n%n%b", "--date=format:%Y-%m-%d %H:%M", rev)
+			"--format=%C(yellow)%h%C(reset) %C(bold)%s%C(reset)%n%C(green)%an%C(reset) · %ad (%ar)%n%+b", "--date=format:%Y-%m-%d %H:%M", rev)
 	}
 	var b strings.Builder
 	for _, s := range []struct {

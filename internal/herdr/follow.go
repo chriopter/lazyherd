@@ -102,7 +102,7 @@ func (p *lazygitProcess) open(line string) error {
 			return err
 		}
 		// The pager reads its keys from the terminal, the text from stdin.
-		cmd = exec.Command("less", "-R", "--mouse")
+		cmd = exec.Command("less", "-R", "-c", "--mouse")
 		cmd.Env = append(os.Environ(), "LESS=")
 		cmd.Stdin = strings.NewReader(text)
 	} else {
